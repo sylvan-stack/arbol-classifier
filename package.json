@@ -1,0 +1,10 @@
+{
+  "name": "@sylvan-stack/arbol-classifier",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Arbol Classifier: a component of Arbol 2.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sylvan-stack/arbol-classifier.git"
+  }
+}
