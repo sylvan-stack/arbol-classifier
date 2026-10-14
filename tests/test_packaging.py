@@ -109,5 +109,7 @@ class Packaging(unittest.TestCase):
         for name in ("info.identity", "info.defaults", "settings.unknown-key", "cli.unknown-command", "classify.choice",
                      "classify.noul", "classify.score", "classify.what-is-sent", "classify.names-a-model",
                      "classify.size-limit", "classify.other-model", "classify.missing-answer",
-                     "classify.endpoint-elsewhere", "classify.writes-nothing"):
+                     "classify.endpoint-elsewhere", "classify.writes-nothing", "key.keychain", "key.not-found",
+                     "key.only-in-the-bearer-token", "add-key.at-a-terminal", "add-key.no-terminal",
+                     "add-key.not-a-key", "add-key.keychain-refuses", "cli.add-key-arguments", "cli.build-entry"):
             self.assertIn(name, names)

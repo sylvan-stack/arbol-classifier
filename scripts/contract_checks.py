@@ -4,21 +4,31 @@ Each scenario runs the Build's own program with a fresh home folder and checks i
 standard output, its standard error and its exit status. From SYL-152 on it covers
 `info`, the settings file and the refusals of the command line (CLS-0.14). From SYL-157
 on it covers `classify` against the stand-in for Jev, which records what it was sent.
+From SYL-161 on it covers the key: from the Keychain item or the key command, and
+`add-key` at a pretend terminal.
+
+The program is started through `scripts/contract_entry.py`, which puts the stand-in for
+`security` in the place of `/usr/bin/security`, so that no scenario reaches the real
+Keychain. One scenario, `cli.build-entry`, starts the Build's entry `bin/arbol-classifier`
+itself, with a key command in its settings.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import select
 import socket
 import subprocess
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from jev_stand_in import Received, Reply, StandIn
+from security_stand_in import SecurityStandIn
 
 NAME = "arbol-classifier"
 CODES = ("invalid_input", "not_signed_in", "credential_rejected", "rate_limited", "vendor_unavailable",
@@ -27,7 +37,21 @@ DEFAULT_MODEL = "jev-1.13.0"
 DEFAULT_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 INFO_FIELDS = {"name", "version", "build", "contract", "settingsFile", "model", "endpoint", "keyFound"}
 KEY = "contract-check-key-5c1e"  # given by the key command of the test settings; not a Jev key
+KEY_SECOND = "contract-check-key-second-7a2d"
+TYPED = "contract-check-typed-key-91b0"  # typed at the pretend terminal in add-key
+TYPED_SECOND = 'contract-check-typed-key-second-"3f6e\\'  # with a quote and a backslash
+TEST_KEYS = (KEY, KEY_SECOND, TYPED, TYPED_SECOND)
 JUDGED = "Judged text marker: can you also update the README while you are at it?"
+SERVICE = "com.sylvan-stack.arbol.classifier"
+ACCOUNT = "jev"
+NO_KEY = ("No Jev API key was found. arbol-classifier looked in the login Keychain for the item with the service "
+          f"{SERVICE} and the account {ACCOUNT}")
+STORE = "arbol-classifier add-key"
+FIND = ["find-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"]
+# It makes the pretend terminal on its standard input its controlling terminal, in a session of its own, and then
+# starts the program, which finds the pretend terminal as /dev/tty.
+AT_TERMINAL = ("import fcntl, os, sys, termios\nos.setsid()\nfcntl.ioctl(0, termios.TIOCSCTTY, 0)\n"
+               "os.execv(sys.argv[1], sys.argv[1:])\n")
 
 
 class ContractFailure(Exception):
@@ -55,23 +79,98 @@ class Contract:
     build: str
     home: Path
     work: Path  # beside the home folder: the test settings for classify and the file the key command prints
+    security: SecurityStandIn  # in the place of /usr/bin/security, in the work folder
+
+    @property
+    def python(self) -> Path:
+        return self.build_folder / "runtime/python/bin/python3.14"
+
+    def command(self, *args: str, entry: bool = False) -> list[str]:
+        """The Build's own entry, or the same program with the stand-in for security (contract_entry.py)."""
+        if entry:
+            return [str(self.program), *args]
+        return [str(self.python), "-I", "-B", str(self.build_folder / "scripts/contract_entry.py"),
+                str(self.security.program), *args]
+
+    def environment(self, env: dict[str, str] | None = None) -> dict[str, str]:
+        return {"HOME": str(self.home), "PATH": "/usr/bin:/bin", "LANG": "C", **(env or {})}
 
     def call(self, *args: str, cwd: Path | None = None, data: bytes | None = None,
-             env: dict[str, str] | None = None) -> Outcome:
-        result = subprocess.run([str(self.program), *args], cwd=cwd or self.home, input=data or b"",
-                                env={"HOME": str(self.home), "PATH": "/usr/bin:/bin", "LANG": "C", **(env or {})},
-                                capture_output=True, timeout=60, check=False)
-        stdout = result.stdout.decode("utf-8")
-        stderr = result.stderr.decode("utf-8", "replace")
-        expect(result.returncode in (0, 1), f"exit status {result.returncode} for {list(args)}")
-        expect(stdout.endswith("\n") and stdout.count("\n") == 1,
-               f"standard output is not one line for {list(args)}")
+             env: dict[str, str] | None = None, entry: bool = False) -> Outcome:
+        """One call without a terminal: in a session of its own, so that it cannot reach the terminal of the check."""
+        result = subprocess.run(self.command(*args, entry=entry), cwd=cwd or self.home, input=data or b"",
+                                env=self.environment(env), capture_output=True, timeout=60, check=False,
+                                start_new_session=True)
+        return self.outcome(list(args), result.returncode, result.stdout, result.stderr)
+
+    def at_terminal(self, *args: str, typed: bytes) -> tuple[Outcome, bytes]:
+        """One call at a pretend terminal: type `typed` when the program asks, and give what the terminal showed."""
+        master, slave = os.openpty()
+        try:
+            process = subprocess.Popen([str(self.python), "-I", "-B", "-c", AT_TERMINAL, *self.command(*args)],
+                                       stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=self.home,
+                                       env=self.environment())
+        finally:
+            os.close(slave)
+        shown = b""
+        try:
+            end = time.monotonic() + 30
+            while not (b"Jev API key" in shown and shown.endswith(b": ")) and time.monotonic() < end:
+                ready, _, _ = select.select([master], [], [], 0.1)
+                if ready:
+                    try:
+                        chunk = os.read(master, 1024)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    shown += chunk
+                elif process.poll() is not None:
+                    break
+            if process.poll() is None:
+                os.write(master, typed)
+            # The terminal is read until the program has ended: macOS lets a program that holds a terminal end
+            # only when what it wrote there has been read.
+            end = time.monotonic() + 60
+            while time.monotonic() < end:
+                if select.select([master], [], [], 0.1)[0]:
+                    try:
+                        chunk = os.read(master, 1024)
+                    except OSError:
+                        chunk = b""
+                    shown += chunk
+                    if chunk:
+                        continue
+                if process.poll() is not None:
+                    break
+            stdout, stderr = process.communicate(timeout=5)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            os.close(master)
+        outcome = self.outcome(list(args), process.returncode, stdout, stderr)
+        expect_no_key(shown.decode("utf-8", "replace"), f"the terminal of {list(args)}")
+        return outcome, shown
+
+    def outcome(self, args: list[str], status: int, out: bytes, err: bytes) -> Outcome:
+        stdout = out.decode("utf-8")
+        stderr = err.decode("utf-8", "replace")
+        expect_no_key(stdout + stderr, f"the output of {args}")
+        expect(status in (0, 1), f"exit status {status} for {args}")
+        expect(stdout.endswith("\n") and stdout.count("\n") == 1, f"standard output is not one line for {args}")
         try:
             document = json.loads(stdout)
         except ValueError:
-            raise ContractFailure(f"standard output is not one JSON document for {list(args)}") from None
-        expect(isinstance(document, dict), f"standard output is not a JSON object for {list(args)}")
-        return Outcome(result.returncode, stdout, stderr, document)
+            raise ContractFailure(f"standard output is not one JSON document for {args}") from None
+        expect(isinstance(document, dict), f"standard output is not a JSON object for {args}")
+        return Outcome(status, stdout, stderr, document)
+
+    def keychain_settings(self, stand_in: StandIn, name: str = "keychain.json", **fields: object) -> Path:
+        """Test settings with the stand-in for Jev as endpoint, and no key command: the key comes from the item."""
+        file = self.work / name
+        file.write_text(json.dumps({"endpoint": stand_in.url, **fields}), encoding="utf-8")
+        return file
 
     def info(self, *args: str, cwd: Path | None = None) -> dict[str, Any]:
         outcome = self.call("info", *args, cwd=cwd)
@@ -103,8 +202,7 @@ class Contract:
         """One classify call. Neither the judged text nor the key may appear in what it prints."""
         data = request if isinstance(request, bytes) else json.dumps(request).encode("utf-8")
         outcome = self.call("classify", "--settings", str(settings), *args, data=data, env=env)
-        for value, what in ((JUDGED, "the judged text"), (KEY, "the key")):
-            expect(value not in outcome.stdout and value not in outcome.stderr, f"classify printed {what}")
+        expect(JUDGED not in outcome.stdout and JUDGED not in outcome.stderr, "classify printed the judged text")
         expect(outcome.stderr == "", f"classify wrote to standard error: {outcome.stderr}")
         return outcome
 
@@ -125,6 +223,18 @@ class Contract:
         expect(len(stand_in.received) == sent + sends,
                f"classify sent {len(stand_in.received) - sent} requests before it ended with {code}, not {sends}")
         return error
+
+
+def forms(value: str) -> set[str]:
+    """A value as it is, and as it is written inside a JSON text."""
+    return {value, json.dumps(value)[1:-1]}
+
+
+def expect_no_key(text: str, where: str) -> None:
+    """None of the test keys, in any of its forms, is in the text."""
+    for key in TEST_KEYS:
+        for form in forms(key):
+            expect(form not in text, f"{where} shows a test key")
 
 
 def failed(outcome: Outcome, args: list[str], code: str, names: tuple[str, ...], hidden: tuple[str, ...]
@@ -553,6 +663,165 @@ def classify_writes_nothing(contract: Contract) -> None:
     expect(snapshot(contract.build_folder) == before, "the calls changed the Build's folder")
 
 
+def bearer(received: Received) -> str | None:
+    return next((value for name, value in received.headers if name.lower() == "authorization"), None)
+
+
+def security_args(contract: Contract) -> list[list[str]]:
+    return [call["args"] for call in contract.security.calls()]
+
+
+@scenario("key.keychain")
+def key_keychain(contract: Contract) -> None:
+    """The key is read at each call from the Keychain item, with the system's command, and never written there."""
+    contract.security.put(SERVICE, ACCOUNT, KEY)
+    with StandIn() as stand_in:
+        settings = contract.keychain_settings(stand_in)
+        request = choice_request()
+        contract.answered(request, settings, stand_in)
+        expect(bearer(stand_in.received[-1]) == f"Bearer {KEY}", "classify did not send the key of the item")
+        contract.security.put(SERVICE, ACCOUNT, KEY_SECOND)
+        contract.answered(request, settings, stand_in)
+        expect(bearer(stand_in.received[-1]) == f"Bearer {KEY_SECOND}",
+               "classify did not read the item again at the second call")
+        expect(contract.info("--settings", str(settings))["keyFound"] is True, "info did not find the key of the item")
+    expect(security_args(contract) == [FIND, FIND, FIND],
+           f"the calls asked security for more than the item: {security_args(contract)}")
+    expect(contract.security.value(SERVICE, ACCOUNT) == KEY_SECOND, "a call changed the item")
+
+
+@scenario("key.not-found")
+def key_not_found(contract: Contract) -> None:
+    """No key: no item, an empty item, an item that cannot be read, a key command that fails or prints nothing."""
+    with StandIn() as stand_in:
+        keychain = contract.keychain_settings(stand_in)
+        failing = contract.keychain_settings(stand_in, "failing.json", secret={"from": "command",
+                                                                              "command": ["/usr/bin/false"]})
+        silent = contract.keychain_settings(stand_in, "silent.json", secret={"from": "command",
+                                                                            "command": ["/usr/bin/true"]})
+        where = f"the command that the settings file {failing} names for the key"
+        cases: list[tuple[str, Callable[[], None], Path, tuple[str, ...]]] = [
+            ("no item", lambda: None, keychain, (NO_KEY + ".",)),
+            ("an empty item", lambda: contract.security.put(SERVICE, ACCOUNT, ""), keychain,
+             (NO_KEY, "the item is empty")),
+            ("an item that cannot be read", lambda: contract.security.fail(51), keychain,
+             (NO_KEY, "could not be read")),
+            ("a key command that fails", lambda: contract.security.fail(None), failing, (where, "failed")),
+            ("a key command that prints nothing", lambda: None, silent,
+             (f"the command that the settings file {silent} names for the key", "printed nothing")),
+        ]
+        for case, prepare, settings, names in cases:
+            prepare()
+            error = contract.classify_failed(choice_request(), settings, stand_in, "not_signed_in", names)
+            expect(error["message"].startswith("No Jev API key was found."), f"{case}: {error['message']}")
+            expect(STORE in str(error.get("remedy")), f"{case}: the remedy does not say how to store the key: {error}")
+            expect(contract.info("--settings", str(settings))["keyFound"] is False, f"{case}: info found a key")
+        expect(stand_in.received == [], "the stand-in for Jev received a request without a key")
+    expect(contract.security.value(SERVICE, ACCOUNT) == "", "a call changed the item")
+
+
+@scenario("key.only-in-the-bearer-token")
+def key_only_in_the_bearer_token(contract: Contract) -> None:
+    """The key appears in no output, diagnostic, argument, environment or settings file: only in the bearer token."""
+    contract.security.put(SERVICE, ACCOUNT, KEY)
+    with StandIn() as stand_in:
+        settings = contract.keychain_settings(stand_in)
+        contract.answered(choice_request(), settings, stand_in)
+        contract.info("--settings", str(settings))
+        contract.classify_failed({"state": JUDGED}, settings, stand_in, "invalid_input")
+        stand_in.script = lambda received: Reply.of({"model": "jev-9.9.9", "answers": {}, "echo": bearer(received)})
+        contract.classify_failed(choice_request(), settings, stand_in, "vendor_error", sends=1)
+        stand_in.script = lambda received: Reply.of({"error": f"refused {bearer(received)}"}, 401)
+        contract.classify_failed(choice_request(), settings, stand_in, "vendor_error", sends=1)
+        expect(len(stand_in.received) == 3, f"the stand-in for Jev received {len(stand_in.received)} requests, not 3")
+        for received in stand_in.received:
+            expect(bearer(received) == f"Bearer {KEY}", "a request did not carry the key as its bearer token")
+            elsewhere = [received.method, received.path, received.body.decode("utf-8")] + [
+                f"{name}: {value}" for name, value in received.headers if name.lower() != "authorization"]
+            expect_no_key(json.dumps(elsewhere), "a request to Jev outside its bearer token")
+    for call in contract.security.calls():
+        expect_no_key(json.dumps([call["args"], call["env"]]), "an argument or the environment of security")
+    expect_no_key(settings.read_text(encoding="utf-8"), "the settings file")
+
+
+@scenario("add-key.at-a-terminal")
+def add_key_at_a_terminal(contract: Contract) -> None:
+    """add-key stores what was typed at the terminal; info then finds it, classify sends it; a second one replaces it."""
+    outcome, shown = contract.at_terminal("add-key", typed=TYPED.encode() + b"\n")
+    expect(outcome.status == 0, f"add-key ended with status {outcome.status}: {outcome.stdout}")
+    expect(outcome.document == {"keychain": {"service": SERVICE, "account": ACCOUNT}, "replaced": False},
+           f"add-key printed {outcome.stdout}")
+    expect(b"Jev API key" in shown, "add-key did not ask at the terminal")
+    expect(contract.security.value(SERVICE, ACCOUNT) == TYPED, "the stand-in for security did not receive the key")
+    calls = contract.security.calls()
+    expect(any(TYPED in call["stdin"] for call in calls), "the key did not reach security on its standard input")
+    for call in calls:
+        expect_no_key(json.dumps([call["args"], call["env"]]), "an argument or the environment of security")
+    expect(contract.info()["keyFound"] is True, "info did not find the key that add-key stored")
+    with StandIn() as stand_in:
+        settings = contract.keychain_settings(stand_in)
+        contract.answered(choice_request(), settings, stand_in)
+        expect(bearer(stand_in.received[-1]) == f"Bearer {TYPED}", "classify did not send the key that add-key stored")
+        outcome, _ = contract.at_terminal("add-key", typed=TYPED_SECOND.encode() + b"\r")
+        expect(outcome.status == 0 and outcome.document.get("replaced") is True,
+               f"the second add-key did not say that it replaced the key: {outcome.stdout}")
+        expect(contract.security.value(SERVICE, ACCOUNT) == TYPED_SECOND, "the second add-key did not replace the key")
+        contract.answered(choice_request(), settings, stand_in)
+        expect(bearer(stand_in.received[-1]) == f"Bearer {TYPED_SECOND}", "classify did not send the replaced key")
+    commands = [word for call in contract.security.calls() for word in call["args"] + call["stdin"].split()]
+    expect("delete-generic-password" not in commands, "add-key removed the item")
+
+
+@scenario("add-key.no-terminal")
+def add_key_no_terminal(contract: Contract) -> None:
+    """Without a terminal add-key refuses, and takes no key from standard input."""
+    outcome = contract.call("add-key", data=TYPED.encode() + b"\n")
+    error = failed(outcome, ["add-key"], "invalid_input", ("at a terminal", "Nothing was stored"), ())
+    expect("there is none" in error["message"], f"the refusal does not say there is no terminal: {error}")
+    expect(contract.security.calls() == [], "add-key without a terminal started security")
+
+
+@scenario("add-key.not-a-key")
+def add_key_not_a_key(contract: Contract) -> None:
+    """Nothing typed, or something that cannot be a key: refused, and nothing is stored."""
+    for typed, says in ((b"\n", "No key was typed"), (b"\x04", "No key was typed"),
+                        (TYPED.encode() + b" and more\n", "cannot be a Jev API key")):
+        outcome, _ = contract.at_terminal("add-key", typed=typed)
+        failed(outcome, ["add-key"], "invalid_input", (says, "Nothing was stored"), ())
+    expect(contract.security.calls() == [], "add-key started security for something that is not a key")
+
+
+@scenario("add-key.keychain-refuses")
+def add_key_keychain_refuses(contract: Contract) -> None:
+    """A Keychain that does not store the key: the call fails and says so, without the key."""
+    contract.security.fail(51)
+    outcome, _ = contract.at_terminal("add-key", typed=TYPED.encode() + b"\n")
+    failed(outcome, ["add-key"], "internal", ("could not be stored", SERVICE), ())
+
+
+@scenario("cli.add-key-arguments")
+def cli_add_key_arguments(contract: Contract) -> None:
+    for args in (("add-key", "--settings", "other.json"), ("add-key", "--timeout", "5"), ("add-key", "now")):
+        contract.refused(*args)
+    expect(contract.security.calls() == [], "a refused add-key started security")
+
+
+@scenario("cli.build-entry")
+def cli_build_entry(contract: Contract) -> None:
+    """The Build's own entry, bin/arbol-classifier, without the stand-in for security: a key command gives the key."""
+    with StandIn() as stand_in:
+        settings = contract.classify_settings(stand_in)
+        info = contract.call("info", "--settings", str(settings), entry=True)
+        expect(info.status == 0 and info.document.get("keyFound") is True and info.stderr == "",
+               f"the Build's entry did not answer info: {info.stdout}")
+        outcome = contract.call("classify", "--settings", str(settings), data=json.dumps(choice_request()).encode(),
+                                entry=True)
+        expect(outcome.status == 0 and outcome.document == json.loads(stand_in.replies[-1].body),
+               f"the Build's entry did not answer classify: {outcome.stdout}")
+        expect(bearer(stand_in.received[-1]) == f"Bearer {KEY}", "the Build's entry did not send the key")
+        failed(contract.call("judge", entry=True), ["judge"], "invalid_input", (), ())
+
+
 def snapshot(*roots: Path) -> dict[str, tuple[int, int]]:
     """Every file and folder under the roots, except the Build's record and log, which the build tool writes."""
     found: dict[str, tuple[int, int]] = {}
@@ -577,7 +846,8 @@ def run_contract(program: Path, build_folder: Path, version: str, build: str) ->
             home.mkdir()
             work = base / f"work-{index}"
             work.mkdir()
-            contract = Contract(program, build_folder, version, build, home, work)
+            contract = Contract(program, build_folder, version, build, home, work,
+                                SecurityStandIn(work / "security", str(build_folder / "runtime/python/bin/python3.14")))
             try:
                 function(contract)
             except (ContractFailure, OSError, subprocess.TimeoutExpired, UnicodeDecodeError) as error:
@@ -589,7 +859,8 @@ def run_contract(program: Path, build_folder: Path, version: str, build: str) ->
         home = base / "home-quiet"
         (home / ".arbol").mkdir(parents=True)
         (home / ".arbol/arbol-classifier.json").write_text('{"model": "jev-1.14.0"}')
-        contract = Contract(program, build_folder, version, build, home, base / "work-quiet")
+        contract = Contract(program, build_folder, version, build, home, base / "work-quiet",
+                            SecurityStandIn(base / "work-quiet/security", str(build_folder / "runtime/python/bin/python3.14")))
         quiet_before = snapshot(home)
         try:
             contract.info()
