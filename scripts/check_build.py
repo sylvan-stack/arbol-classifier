@@ -74,9 +74,9 @@ def contract(folder: Path, number: str | None) -> int:
 
 
 def live(folder: Path, number: str | None) -> int:
-    print("The live check, one real question to Jev, comes with SYL-164 (CLS-0.15). "
-          "Until then no Build of arbol-classifier counts as working.", file=sys.stderr)
-    return 1
+    from live_check import run_live
+
+    return run_live(folder)
 
 
 def main() -> int:

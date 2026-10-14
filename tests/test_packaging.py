@@ -99,9 +99,10 @@ class Packaging(unittest.TestCase):
             self.assertTrue(check["command"].endswith(f'/scripts/check_build.py" {check["kind"]}'))
             self.assertIn("-I -B", check["command"])
 
-    def test_live_check_does_not_exist_yet(self) -> None:
-        with patch("sys.stderr"):
-            self.assertEqual(check_build.live(ROOT, None), 1)
+    def test_the_live_check_is_the_one_real_question(self) -> None:
+        with patch("live_check.run_live", return_value=0) as run_live:
+            self.assertEqual(check_build.live(ROOT, "5"), 0)
+        run_live.assert_called_once_with(ROOT)
 
     def test_the_contract_check_has_its_scenarios(self) -> None:
         names = [name for name, _ in contract_checks.SCENARIOS]

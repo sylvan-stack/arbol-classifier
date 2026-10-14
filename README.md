@@ -9,9 +9,9 @@ Its specification is CLS-0, `~/Artifacts/arbol-classifier/specs/00-the-classifie
 | Package | `@sylvan-stack/arbol-classifier` 1.0.0 |
 | Artifact corpus | `~/Artifacts/arbol-classifier` (GitHub `sylvan-stack/arbol-classifier-artifacts`) |
 
-## What works
+## What it does
 
-From SYL-152: the program, its settings and `info`. From SYL-157: `classify`, from the request to Jev's reply. From SYL-161: the key from the Keychain, and `add-key`. From SYL-162: the time limit, the attempts and the table of errors.
+It has three commands: `classify` has one request judged by Jev, `info` says which Build runs and with which settings, and `add-key` stores the Jev key. Every part of CLS-0 is built and checked, and a Build counts as working only after one real question to Jev.
 
 ```sh
 arbol-classifier info
@@ -67,7 +67,9 @@ bin/arbol-classifier info
 |---|---|
 | `unit` | The packaged unit tests, with the packaged interpreter, without network and without the Keychain: `scripts/security_stand_in.py` takes the place of `/usr/bin/security` and keeps its items in a folder of its own |
 | `contract` | `scripts/contract_checks.py`: starts the built program with a fresh home folder and checks what it prints. From SYL-152: `info`, the settings file and the refusals of the command line. From SYL-157: `classify` against the stand-in for Jev, `scripts/jev_stand_in.py`, a small server on the loopback address that answers by a script and records what it was sent. From SYL-161: the key from the Keychain item or the key command, `not_signed_in`, and `add-key` at a pretend terminal. From SYL-162: every row of the table of errors, the attempts, the waits and the time limit, with a stand-in for Jev that can refuse, drop the connection, hold its answer or send it one byte at a time. The program is started through `scripts/contract_entry.py`, which puts the stand-in for `security` in the place of `/usr/bin/security`, so the check never reaches the real Keychain, and which multiplies every time of a call by a scale, so a scenario about time takes a fraction of a second; the scenario `cli.build-entry` starts `bin/arbol-classifier` itself, with a key command |
-| `live` | One real question to Jev. It does not exist before SYL-164 and fails, so no Build counts as working yet |
+| `live` | `scripts/live_check.py`: one real `choice` question to Jev with the real key, which costs a fraction of a cent. It starts the Build's own `bin/arbol-classifier` with the person's home folder and nothing else of the environment, so with their settings file and their Keychain item: first `info`, then `classify` with the example question of CLS-0. It passes when the reply names the model that `info` names and chooses one of the options asked. The settings must name Jev's own address, so a stand-in for Jev cannot pass it. It writes the model, the answer, the time and the tokens used into the Build's log. Without a key, `classify` refuses with `not_signed_in`, the check fails, and so does the Build |
+
+A Build counts as working only when all three pass. To see a build fail the `live` check for want of a key, without touching the Keychain item, name an executable that takes the place of `/usr/bin/security` in `ARBOL_CLASSIFIER_LIVE_SECURITY`, such as the stand-in for `security` with no item in it. The live check then starts the program through `scripts/contract_entry.py` with times unchanged. This can only take the key away: the question still goes to Jev itself.
 
 A development candidate outside the registry:
 
