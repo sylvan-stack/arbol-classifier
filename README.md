@@ -11,12 +11,18 @@ Its specification is CLS-0, `~/Artifacts/arbol-classifier/specs/00-the-classifie
 
 ## What works
 
-From SYL-152: the program, its settings and `info`. `classify` makes no call to Jev yet; it comes with SYL-157.
+From SYL-152: the program, its settings and `info`. From SYL-157: `classify`, from the request to Jev's reply.
 
 ```sh
 arbol-classifier info
 arbol-classifier info --settings ./test-settings.json
+arbol-classifier classify < request.json
+arbol-classifier classify --timeout 5 --settings ./test-settings.json < request.json
 ```
+
+`classify` reads one request in Jev's own form on standard input: a `state` and named `questions` of the kinds `choice`, `noul` and `score`. It checks only what CLS-0 lists (one JSON object, a `state`, at least one question, a `type` and `instructions` in each, no `model`) and interprets no question. It adds `model`, measures the body as it is sent against `maxRequestBytes`, and sends it with one `POST` to the endpoint, the key as a bearer token. The reply is printed as Jev gave it, after the check that it names the model asked for and holds an answer for every question asked and for no other.
+
+Until SYL-161 the key comes only from a command that the settings name (`"secret": {"from": "command", "command": [...]}`); the Keychain item, the default, answers `internal`. Until SYL-162 there is one attempt, the time limit applies to each step of the connection, and a status other than 200 is a `vendor_error`.
 
 `info` prints one JSON document: its name, the package version, the build number, the version of its contract (1), its settings file, the Jev model it uses, the address it calls, and `keyFound`, which stays `false` until the key is read (SYL-161). A refusal prints `{ "error": … }` with the error object of DRV-4 and ends with status 1. `-v <build number>` belongs to the launcher, not to the program.
 
@@ -55,7 +61,7 @@ bin/arbol-classifier info
 | Check | What it runs |
 |---|---|
 | `unit` | The packaged unit tests, with the packaged interpreter, without network and without the Keychain |
-| `contract` | `scripts/contract_checks.py`: starts the built program with a fresh home folder and checks what it prints. From SYL-152: `info`, the settings file and the refusals of the command line |
+| `contract` | `scripts/contract_checks.py`: starts the built program with a fresh home folder and checks what it prints. From SYL-152: `info`, the settings file and the refusals of the command line. From SYL-157: `classify` against the stand-in for Jev, `scripts/jev_stand_in.py`, a small server on the loopback address that answers by a script and records what it was sent |
 | `live` | One real question to Jev. It does not exist before SYL-164 and fails, so no Build counts as working yet |
 
 A development candidate outside the registry:

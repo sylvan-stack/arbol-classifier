@@ -106,5 +106,8 @@ class Packaging(unittest.TestCase):
     def test_the_contract_check_has_its_scenarios(self) -> None:
         names = [name for name, _ in contract_checks.SCENARIOS]
         self.assertEqual(len(names), len(set(names)))
-        for name in ("info.identity", "info.defaults", "settings.unknown-key", "cli.unknown-command"):
+        for name in ("info.identity", "info.defaults", "settings.unknown-key", "cli.unknown-command", "classify.choice",
+                     "classify.noul", "classify.score", "classify.what-is-sent", "classify.names-a-model",
+                     "classify.size-limit", "classify.other-model", "classify.missing-answer",
+                     "classify.endpoint-elsewhere", "classify.writes-nothing"):
             self.assertIn(name, names)

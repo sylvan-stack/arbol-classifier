@@ -2,13 +2,15 @@
 
 Each scenario runs the Build's own program with a fresh home folder and checks its
 standard output, its standard error and its exit status. From SYL-152 on it covers
-`info`, the settings file and the refusals of the command line (CLS-0.14).
+`info`, the settings file and the refusals of the command line (CLS-0.14). From SYL-157
+on it covers `classify` against the stand-in for Jev, which records what it was sent.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import tempfile
 from collections.abc import Callable
@@ -16,12 +18,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from jev_stand_in import Received, Reply, StandIn
+
 NAME = "arbol-classifier"
 CODES = ("invalid_input", "not_signed_in", "credential_rejected", "rate_limited", "vendor_unavailable",
          "vendor_error", "limit_reached", "internal")
 DEFAULT_MODEL = "jev-1.13.0"
 DEFAULT_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 INFO_FIELDS = {"name", "version", "build", "contract", "settingsFile", "model", "endpoint", "keyFound"}
+KEY = "contract-check-key-5c1e"  # given by the key command of the test settings; not a Jev key
+JUDGED = "Judged text marker: can you also update the README while you are at it?"
 
 
 class ContractFailure(Exception):
@@ -48,10 +54,12 @@ class Contract:
     version: str
     build: str
     home: Path
+    work: Path  # beside the home folder: the test settings for classify and the file the key command prints
 
-    def call(self, *args: str, cwd: Path | None = None) -> Outcome:
-        result = subprocess.run([str(self.program), *args], cwd=cwd or self.home, stdin=subprocess.DEVNULL,
-                                env={"HOME": str(self.home), "PATH": "/usr/bin:/bin", "LANG": "C"},
+    def call(self, *args: str, cwd: Path | None = None, data: bytes | None = None,
+             env: dict[str, str] | None = None) -> Outcome:
+        result = subprocess.run([str(self.program), *args], cwd=cwd or self.home, input=data or b"",
+                                env={"HOME": str(self.home), "PATH": "/usr/bin:/bin", "LANG": "C", **(env or {})},
                                 capture_output=True, timeout=60, check=False)
         stdout = result.stdout.decode("utf-8")
         stderr = result.stderr.decode("utf-8", "replace")
@@ -73,28 +81,69 @@ class Contract:
         return outcome.document
 
     def refused(self, *args: str, names: tuple[str, ...] = (), hidden: tuple[str, ...] = ()) -> dict[str, Any]:
-        outcome = self.call(*args)
-        expect(outcome.status == 1, f"{list(args)} ended with status {outcome.status}, not 1")
-        expect(set(outcome.document) == {"error"}, f"{list(args)} printed more than an error: {outcome.stdout}")
-        error: dict[str, Any] = outcome.document["error"]
-        expect(isinstance(error, dict), f"{list(args)} printed an error that is not an object")
-        expect(error.get("code") == "invalid_input", f"{list(args)} was refused with {error.get('code')}")
-        expect(error.get("code") in CODES and error.get("retryable") is False,
-               f"{list(args)} printed an error object outside CLS-0: {error}")
-        expect(isinstance(error.get("message"), str) and bool(error["message"]), f"{list(args)} has no message")
-        for name in names:
-            expect(name in error["message"], f"the message for {list(args)} does not name {name}: {error['message']}")
-        for value in hidden:
-            expect(value not in outcome.stdout and value not in outcome.stderr,
-                   f"the output for {list(args)} shows the value {value!r}")
-        expect(outcome.stderr == "", f"{list(args)} wrote to standard error: {outcome.stderr}")
-        return error
+        return failed(self.call(*args), list(args), "invalid_input", names, hidden)
 
     def settings(self, value: object, name: str = ".arbol/arbol-classifier.json") -> Path:
         file = self.home / name
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_text(value if isinstance(value, str) else json.dumps(value), encoding="utf-8")
         return file
+
+    def classify_settings(self, stand_in: StandIn, **fields: object) -> Path:
+        """Test settings beside the home folder: the stand-in as endpoint, and a command that prints KEY."""
+        key_file = self.work / "key.txt"
+        key_file.write_text(KEY + "\n", encoding="utf-8")
+        value = {"endpoint": stand_in.url, "secret": {"from": "command", "command": ["/bin/cat", str(key_file)]},
+                 **fields}
+        file = self.work / "settings.json"
+        file.write_text(json.dumps(value), encoding="utf-8")
+        return file
+
+    def classify(self, request: object, settings: Path, *args: str, env: dict[str, str] | None = None) -> Outcome:
+        """One classify call. Neither the judged text nor the key may appear in what it prints."""
+        data = request if isinstance(request, bytes) else json.dumps(request).encode("utf-8")
+        outcome = self.call("classify", "--settings", str(settings), *args, data=data, env=env)
+        for value, what in ((JUDGED, "the judged text"), (KEY, "the key")):
+            expect(value not in outcome.stdout and value not in outcome.stderr, f"classify printed {what}")
+        expect(outcome.stderr == "", f"classify wrote to standard error: {outcome.stderr}")
+        return outcome
+
+    def answered(self, request: object, settings: Path, stand_in: StandIn, *args: str) -> dict[str, Any]:
+        """A classify call that succeeds: one request sent, and the reply printed as the stand-in gave it."""
+        sent = len(stand_in.received)
+        outcome = self.classify(request, settings, *args)
+        expect(outcome.status == 0, f"classify ended with status {outcome.status}: {outcome.stdout}")
+        expect(len(stand_in.received) == sent + 1, f"classify sent {len(stand_in.received) - sent} requests, not 1")
+        expect(outcome.document == json.loads(stand_in.replies[-1].body),
+               f"classify did not print the reply as Jev gave it: {outcome.stdout}")
+        return outcome.document
+
+    def classify_failed(self, request: object, settings: Path, stand_in: StandIn, code: str,
+                        names: tuple[str, ...] = (), sends: int = 0) -> dict[str, Any]:
+        sent = len(stand_in.received)
+        error = failed(self.classify(request, settings), ["classify"], code, names, ())
+        expect(len(stand_in.received) == sent + sends,
+               f"classify sent {len(stand_in.received) - sent} requests before it ended with {code}, not {sends}")
+        return error
+
+
+def failed(outcome: Outcome, args: list[str], code: str, names: tuple[str, ...], hidden: tuple[str, ...]
+           ) -> dict[str, Any]:
+    """The call ended with status 1 and printed only the error object of DRV-4 with this code."""
+    expect(outcome.status == 1, f"{args} ended with status {outcome.status}, not 1")
+    expect(set(outcome.document) == {"error"}, f"{args} printed more than an error: {outcome.stdout}")
+    error: dict[str, Any] = outcome.document["error"]
+    expect(isinstance(error, dict), f"{args} printed an error that is not an object")
+    expect(error.get("code") == code, f"{args} ended with {error.get('code')}, not {code}")
+    expect(error.get("code") in CODES and error.get("retryable") is (code in ("rate_limited", "vendor_unavailable")),
+           f"{args} printed an error object outside CLS-0: {error}")
+    expect(isinstance(error.get("message"), str) and bool(error["message"]), f"{args} has no message")
+    for name in names:
+        expect(name in error["message"], f"the message for {args} does not name {name}: {error['message']}")
+    for value in hidden:
+        expect(value not in outcome.stdout and value not in outcome.stderr, f"the output for {args} shows {value!r}")
+    expect(outcome.stderr == "", f"{args} wrote to standard error: {outcome.stderr}")
+    return error
 
 
 SCENARIOS: list[tuple[str, Callable[[Contract], None]]] = []
@@ -284,6 +333,226 @@ def cli_timeout(contract: Contract) -> None:
         contract.refused("classify", f"--timeout={value}", names=("--timeout",))
 
 
+def choice_request() -> dict[str, Any]:
+    return {"state": JUDGED, "questions": {"kind": {"type": "choice", "instructions": "What is this message?",
+            "criteria": {"request": "It asks for work to be done", "question": "It asks for information only",
+                         "other": None}}}}
+
+
+def expect_sent(stand_in: StandIn, request: dict[str, Any], model: str = DEFAULT_MODEL) -> Received:
+    """The last request the stand-in received is the request with `model` added and nothing else."""
+    received = stand_in.received[-1]
+    expect((received.method, received.path) == ("POST", "/v1/systemone"),
+           f"classify sent {received.method} {received.path}")
+    expect(received.json() == {**request, "model": model},
+           f"the body sent is not the request with model {model} added: {received.body!r}")
+    return received
+
+
+@scenario("classify.choice")
+def classify_choice(contract: Contract) -> None:
+    with StandIn() as stand_in:
+        settings = contract.classify_settings(stand_in)
+        request = choice_request()
+        result = contract.answered(request, settings, stand_in)
+        expect_sent(stand_in, request)
+        expect(result["answers"]["kind"]["choice"] == "request" and result["model"] == DEFAULT_MODEL,
+               f"the choice is not passed on: {result}")
+        contract.answered(request, settings, stand_in, "--timeout", "5")
+        expect_sent(stand_in, request)
+
+
+@scenario("classify.noul")
+def classify_noul(contract: Contract) -> None:
+    with StandIn() as stand_in:
+        settings = contract.classify_settings(stand_in)
+        request = {"state": {"message": JUDGED, "from": "the Leather Bag"},
+                   "questions": {"work": {"type": "noul", "instructions": "Does the message ask for work?"},
+                                 "polite": {"type": "noul", "instructions": "Is it polite?",
+                                            "criteria": {"true": "It is polite", "false": "It is rude"}}}}
+        result = contract.answered(request, settings, stand_in)
+        expect_sent(stand_in, request)
+        expect(set(result["answers"]) == {"work", "polite"} and result["answers"]["work"]["noul"] == 0.93,
+               f"the answers are not passed on: {result}")
+
+
+@scenario("classify.score")
+def classify_score(contract: Contract) -> None:
+    with StandIn() as stand_in:
+        settings = contract.classify_settings(stand_in)
+        request = {"state": [JUDGED, "and a second message"],
+                   "questions": {"urgency": {"type": "score", "instructions": {"ask": "How urgent is it?"},
+                                             "criteria": ["Not urgent", {"level": "Soon"}, "At once"]}}}
+        result = contract.answered(request, settings, stand_in)
+        expect_sent(stand_in, request)
+        expect(result["answers"]["urgency"]["score"] == 2 and result["answers"]["urgency"]["legend"]["1"]
+               == {"level": "Soon"}, f"the score is not passed on: {result}")
+
+
+@scenario("classify.what-is-sent")
+def classify_what_is_sent(contract: Contract) -> None:
+    with StandIn() as stand_in:
+        settings = contract.classify_settings(stand_in)
+        request = choice_request()
+        contract.answered(request, settings, stand_in)
+        received = expect_sent(stand_in, request)
+        headers = {name.lower(): value for name, value in received.headers}
+        expect(len(headers) == len(received.headers), f"a header was sent twice: {received.headers}")
+        expected = {"host": stand_in.url.split("/")[2], "accept-encoding": "identity",
+                    "content-length": str(len(received.body)), "content-type": "application/json",
+                    "authorization": f"Bearer {KEY}", "user-agent": NAME}
+        expect(headers == expected, f"the headers sent are {received.headers}")
+        expect(set(received.json()) == {"state", "questions", "model"}, "the body holds more than request and model")
+        sent = json.dumps(received.headers) + received.body.decode("utf-8")
+        for value in {socket.gethostname(), socket.gethostname().split(".")[0], str(contract.home),
+                      str(contract.work)}:
+            expect(not value or value not in sent, f"the request names the machine: {value!r}")
+
+
+@scenario("classify.pinned-model")
+def classify_pinned_model(contract: Contract) -> None:
+    with StandIn() as stand_in:
+        request = choice_request()
+        contract.answered(request, contract.classify_settings(stand_in), stand_in)
+        expect_sent(stand_in, request, DEFAULT_MODEL)
+        result = contract.answered(request, contract.classify_settings(stand_in, model="jev-1.14.0"), stand_in)
+        expect_sent(stand_in, request, "jev-1.14.0")
+        expect(result["model"] == "jev-1.14.0", f"the result names {result['model']!r}")
+
+
+@scenario("classify.other-model")
+def classify_other_model(contract: Contract) -> None:
+    with StandIn() as stand_in:
+        settings = contract.classify_settings(stand_in)
+        for model in ("jev-1.14.0", "jev-latest", None):
+            def other(received: Received, model: str | None = model) -> Reply:
+                answers = {name: {"type": "choice", "choice": "request"} for name in received.json()["questions"]}
+                reply: dict[str, Any] = {"answers": answers, "usage": {"input_tokens": 1, "output_tokens": 1}}
+                if model is not None:
+                    reply["model"] = model
+                return Reply.of(reply)
+
+            stand_in.script = other
+            contract.classify_failed(choice_request(), settings, stand_in, "vendor_error", (DEFAULT_MODEL,), sends=1)
+
+
+@scenario("classify.missing-answer")
+def classify_missing_answer(contract: Contract) -> None:
+    with StandIn() as stand_in:
+        settings = contract.classify_settings(stand_in)
+        request = {"state": JUDGED, "questions": {"work": {"type": "noul", "instructions": "Work?"},
+                                                  "polite": {"type": "noul", "instructions": "Polite?"}}}
+        answer = {"type": "noul", "noul": 0.5}
+        for reply in (
+            Reply.of({"model": DEFAULT_MODEL, "answers": {"work": answer}}),
+            Reply.of({"model": DEFAULT_MODEL, "answers": {"work": answer, "polite": answer, "other": answer}}),
+            Reply.of({"model": DEFAULT_MODEL, "answers": {}}),
+            Reply.of({"model": DEFAULT_MODEL}),
+            Reply.of({"model": DEFAULT_MODEL, "answers": [answer, answer]}),
+            Reply.of([{"model": DEFAULT_MODEL}]),
+            Reply(200, b"not JSON"),
+        ):
+            def scripted(received: Received, reply: Reply = reply) -> Reply:
+                return reply
+
+            stand_in.script = scripted
+            contract.classify_failed(request, settings, stand_in, "vendor_error", sends=1)
+
+
+@scenario("classify.names-a-model")
+def classify_names_a_model(contract: Contract) -> None:
+    with StandIn() as stand_in:
+        settings = contract.classify_settings(stand_in)
+        for model in (DEFAULT_MODEL, "jev-latest", None, ["jev-1.13.0"]):
+            contract.classify_failed({**choice_request(), "model": model}, settings, stand_in, "invalid_input",
+                                     ("model",))
+
+
+@scenario("classify.size-limit")
+def classify_size_limit(contract: Contract) -> None:
+    with StandIn() as stand_in:
+        request = choice_request()
+        contract.answered(request, contract.classify_settings(stand_in), stand_in)
+        size = len(stand_in.received[-1].body)
+        exact = contract.classify_settings(stand_in, maxRequestBytes=size)
+        contract.answered(request, exact, stand_in)
+        expect_sent(stand_in, request)
+        contract.classify_failed(request, contract.classify_settings(stand_in, maxRequestBytes=size - 1), stand_in,
+                                 "invalid_input", (str(size), str(size - 1)))
+        pretty = json.dumps(request, indent=8).encode("utf-8")
+        expect(len(pretty) > size, "the pretty request is not larger than the body sent")
+        contract.answered(pretty, contract.classify_settings(stand_in, maxRequestBytes=size), stand_in)
+        expect_sent(stand_in, request)
+        large = {**request, "state": JUDGED + " " + "long " * 12800}
+        contract.classify_failed(large, contract.classify_settings(stand_in), stand_in, "invalid_input", ("64000",))
+
+
+@scenario("classify.malformed")
+def classify_malformed(contract: Contract) -> None:
+    question = {"type": "noul", "instructions": "Work?"}
+    with StandIn() as stand_in:
+        settings = contract.classify_settings(stand_in)
+        for request in (
+            b"", b"{", b"[]", b'"text"', b"null", b"5", b"{} {}", b"\xff\xfe", b'{"state": NaN, "questions": {}}',
+            {"questions": {"work": question}},
+            {"state": JUDGED},
+            {"state": JUDGED, "questions": {}},
+            {"state": JUDGED, "questions": [question]},
+            {"state": JUDGED, "questions": {"work": "Does it ask for work?"}},
+            {"state": JUDGED, "questions": {"work": {"instructions": "Work?"}}},
+            {"state": JUDGED, "questions": {"work": {"type": "noul"}}},
+            {"state": JUDGED, "questions": {"work": question, "polite": {"type": "noul"}}},
+        ):
+            contract.classify_failed(request, settings, stand_in, "invalid_input")
+
+
+@scenario("classify.passes-questions-through")
+def classify_passes_questions_through(contract: Contract) -> None:
+    with StandIn() as stand_in:
+        settings = contract.classify_settings(stand_in)
+        request = {"state": None, "questions": {
+            "order": {"type": "rank", "instructions": None, "hint": {"any": ["data"]}},
+            "kind": {"type": "choice", "instructions": [], "criteria": {}},
+        }, "trace": {"kept": True}}
+        contract.answered(request, settings, stand_in)
+        expect_sent(stand_in, request)
+
+
+@scenario("classify.endpoint-elsewhere")
+def classify_endpoint_elsewhere(contract: Contract) -> None:
+    marker = contract.work / "key-command-ran"
+    for endpoint in ("https://example.com/v1/systemone", "http://192.168.1.20:8080/v1/systemone",
+                     "https://api.typesafe.ai/v2/systemone", "http://api.typesafe.ai/v1/systemone"):
+        settings = contract.work / "elsewhere.json"
+        settings.write_text(json.dumps({"endpoint": endpoint, "secret": {"from": "command",
+                                        "command": ["/usr/bin/touch", str(marker)]}}), encoding="utf-8")
+        error = failed(contract.classify(choice_request(), settings), ["classify"], "invalid_input",
+                       (str(settings), "endpoint"), (endpoint,))
+        expect(not marker.exists(), f"the key command ran for the endpoint {endpoint}: {error}")
+
+
+@scenario("classify.writes-nothing")
+def classify_writes_nothing(contract: Contract) -> None:
+    temporary = contract.work / "tmp"
+    temporary.mkdir()
+    before = snapshot(contract.build_folder)
+    expect(list(contract.home.iterdir()) == [], "the home folder is not empty before the calls")
+    with StandIn() as stand_in:
+        settings = contract.classify_settings(stand_in)
+        environment = {"TMPDIR": str(temporary)}
+        for request in (choice_request(), {"state": JUDGED, "questions": {"work": {"type": "noul",
+                                                                                   "instructions": "Work?"}}}):
+            outcome = contract.classify(request, settings, env=environment)
+            expect(outcome.status == 0, f"classify ended with status {outcome.status}: {outcome.stdout}")
+        stand_in.script = lambda received: Reply.of({"model": "jev-9.9.9", "answers": {}})
+        failed(contract.classify(choice_request(), settings, env=environment), ["classify"], "vendor_error", (), ())
+        failed(contract.classify({"state": JUDGED}, settings, env=environment), ["classify"], "invalid_input", (), ())
+        expect(len(stand_in.received) == 3, f"three calls sent {len(stand_in.received)} requests, not 3")
+    expect(list(contract.home.iterdir()) == [], f"a call left files in the home folder: {list(contract.home.iterdir())}")
+    expect(list(temporary.iterdir()) == [], "a call left files in the temporary folder")
+    expect(snapshot(contract.build_folder) == before, "the calls changed the Build's folder")
+
+
 def snapshot(*roots: Path) -> dict[str, tuple[int, int]]:
     """Every file and folder under the roots, except the Build's record and log, which the build tool writes."""
     found: dict[str, tuple[int, int]] = {}
@@ -306,7 +575,9 @@ def run_contract(program: Path, build_folder: Path, version: str, build: str) ->
         for index, (title, function) in enumerate(SCENARIOS):
             home = base / f"home-{index}"
             home.mkdir()
-            contract = Contract(program, build_folder, version, build, home)
+            work = base / f"work-{index}"
+            work.mkdir()
+            contract = Contract(program, build_folder, version, build, home, work)
             try:
                 function(contract)
             except (ContractFailure, OSError, subprocess.TimeoutExpired, UnicodeDecodeError) as error:
@@ -318,7 +589,7 @@ def run_contract(program: Path, build_folder: Path, version: str, build: str) ->
         home = base / "home-quiet"
         (home / ".arbol").mkdir(parents=True)
         (home / ".arbol/arbol-classifier.json").write_text('{"model": "jev-1.14.0"}')
-        contract = Contract(program, build_folder, version, build, home)
+        contract = Contract(program, build_folder, version, build, home, base / "work-quiet")
         quiet_before = snapshot(home)
         try:
             contract.info()
