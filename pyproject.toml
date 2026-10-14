@@ -1,0 +1,25 @@
+[project]
+name = "arbol-classifier"
+version = "1.0.0"
+description = "Arbol Classifier: a component of Arbol 2 that has a text judged by Jev."
+requires-python = "==3.14.8"
+dependencies = []
+
+[dependency-groups]
+dev = ["mypy==1.19.1", "ruff==0.14.14"]
+
+[tool.uv]
+package = false
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+mypy_path = ["src", "scripts"]
+files = ["src/arbol_classifier", "tests", "scripts", "bin/entry.py"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
