@@ -1,4 +1,4 @@
-"""`classify` as one piece: what it adds, and that it starts nothing but the key command (ARC-0.30)."""
+"""`classify` as one piece: what it adds, and that it starts nothing but what prints the key (ARC-0.30)."""
 
 import json
 import subprocess
@@ -8,8 +8,11 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+from stand_ins import security_stand_in
+
 from arbol_classifier.classify import classify
 from arbol_classifier.errors import Failure
+from arbol_classifier.key import ACCOUNT, SERVICE
 from arbol_classifier.settings import Settings
 
 FILE = Path("/Users/someone/.arbol/arbol-classifier.json")
@@ -89,3 +92,19 @@ class Classify(unittest.TestCase):
             classify(json.dumps(REQUEST).encode(), Settings(secret_command=command), FILE, 10, send=send)
         self.assertEqual(started, [list(command)])
         self.assertEqual(send.calls[0][2], "key-marker")
+
+    def test_starts_nothing_but_security_for_the_key_from_the_keychain(self) -> None:
+        security = security_stand_in(self)
+        security.put(SERVICE, ACCOUNT, "key-marker-item")
+        started: list[list[str]] = []
+        original = subprocess.Popen.__init__
+
+        def recording(popen: subprocess.Popen[bytes], args: Any, *rest: Any, **options: Any) -> None:
+            started.append(list(args))
+            original(popen, args, *rest, **options)
+
+        send = FakeJev()
+        with patch.object(subprocess.Popen, "__init__", recording):
+            classify(json.dumps(REQUEST).encode(), Settings(), FILE, 10, send=send)
+        self.assertEqual(started, [[str(security.program), "find-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"]])
+        self.assertEqual(send.calls[0][2], "key-marker-item")

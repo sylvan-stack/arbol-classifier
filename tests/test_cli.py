@@ -9,11 +9,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from stand_ins import security_stand_in
 from test_identity import expected_identity
 
 from arbol_classifier import cli
 from arbol_classifier.errors import CODES, Failure
 from arbol_classifier.json_types import dumps
+from arbol_classifier.key import ACCOUNT, SERVICE
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -24,6 +26,7 @@ class Invocation(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.home = Path(temporary.name)
         self.environ = {"HOME": str(self.home)}
+        self.security = security_stand_in(self)
 
     def test_info_reports_identity_settings_and_no_key(self) -> None:
         status, document = cli.run(["info"], self.environ)
@@ -42,6 +45,52 @@ class Invocation(unittest.TestCase):
                 "keyFound": False,
             },
         )
+
+    def test_info_says_whether_a_key_was_found_never_the_key(self) -> None:
+        self.security.put(SERVICE, ACCOUNT, "key-marker-item")
+        status, document = cli.run(["info"], self.environ)
+        self.assertEqual((status, document["keyFound"]), (0, True))
+        self.assertNotIn("key-marker", dumps(document))
+        (self.home / "command.json").write_text('{"secret": {"from": "command", "command": ["/usr/bin/false"]}}')
+        status, document = cli.run(["info", "--settings", str(self.home / "command.json")], self.environ)
+        self.assertEqual((status, document["keyFound"]), (0, False))
+
+    def test_add_key_stores_what_was_typed(self) -> None:
+        status, document = cli.run(["add-key"], self.environ, ask=lambda: " key-marker-typed\r\n")
+        self.assertEqual(
+            (status, document),
+            (0, {"keychain": {"service": "com.sylvan-stack.arbol.classifier", "account": "jev"}, "replaced": False}),
+        )
+        self.assertEqual(self.security.value(SERVICE, ACCOUNT), "key-marker-typed")
+        status, document = cli.run(["add-key"], self.environ, ask=lambda: "key-marker-second\n")
+        self.assertEqual((status, document["replaced"]), (0, True))
+        self.assertEqual(self.security.value(SERVICE, ACCOUNT), "key-marker-second")
+        self.assertEqual(list(self.home.iterdir()), [])
+
+    def test_add_key_refuses_what_cannot_be_a_key(self) -> None:
+        for typed, says in (("", "No key was typed"), ("\n", "No key was typed"),
+                            ("key-marker with space\n", "cannot be a Jev API key")):
+            def ask(typed: str = typed) -> str:
+                return typed
+
+            status, document = cli.run(["add-key"], self.environ, ask=ask)
+            error = document["error"]
+            assert isinstance(error, dict)
+            self.assertEqual((status, error["code"]), (1, "invalid_input"))
+            self.assertIn(says, str(error["message"]))
+            self.assertIn("Nothing was stored", str(error["message"]))
+            self.assertNotIn("key-marker", dumps(document))
+        self.assertEqual(self.security.calls(), [])
+
+    def test_add_key_takes_no_options_and_no_arguments(self) -> None:
+        def ask() -> str:
+            raise AssertionError("add-key asked for the key")
+
+        for args in (["add-key", "--settings", "other.json"], ["add-key", "--timeout", "5"], ["add-key", "now"]):
+            status, document = cli.run(args, self.environ, ask=ask)
+            error = document["error"]
+            assert isinstance(error, dict)
+            self.assertEqual((status, error["code"]), (1, "invalid_input"))
 
     def test_info_reads_the_named_settings_file(self) -> None:
         other = self.home / "other.json"
@@ -113,7 +162,10 @@ class Invocation(unittest.TestCase):
         self.assertEqual(error["code"], "internal")
 
     def test_the_program_prints_one_json_document(self) -> None:
-        for args, expected in ((["info"], 0), (["unknown"], 1)):
+        # The program starts the real /usr/bin/security for the Keychain item; a key command keeps it away.
+        settings = self.home / "command.json"
+        settings.write_text('{"secret": {"from": "command", "command": ["/usr/bin/true"]}}')
+        for args, expected in ((["info", "--settings", str(settings)], 0), (["unknown"], 1)):
             result = subprocess.run(
                 [sys.executable, "-I", "-B", str(ROOT / "bin/entry.py"), *args],
                 env={"HOME": str(self.home), "PATH": "/usr/bin:/bin", "LANG": "C"},
@@ -125,7 +177,7 @@ class Invocation(unittest.TestCase):
             self.assertEqual(result.stdout.count(b"\n"), 1)
             self.assertIsInstance(json.loads(result.stdout), dict)
             self.assertEqual(result.stderr, b"")
-        self.assertEqual(list(self.home.iterdir()), [])
+        self.assertEqual(list(self.home.iterdir()), [settings])
 
 
 class Errors(unittest.TestCase):

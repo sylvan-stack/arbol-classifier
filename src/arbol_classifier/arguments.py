@@ -1,4 +1,4 @@
-"""The command line of CLS-0: one command, `--timeout` for `classify` and `--settings` for both."""
+"""The command line of CLS-0: one command, `--timeout` for `classify`, `--settings` for it and `info`."""
 
 import math
 import re
@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from .errors import Failure
 
-COMMANDS: dict[str, tuple[str, ...]] = {"classify": ("timeout", "settings"), "info": ("settings",)}
+COMMANDS: dict[str, tuple[str, ...]] = {"classify": ("timeout", "settings"), "info": ("settings",), "add-key": ()}
 TIMEOUT_RANGE = (1.0, 60.0)
 NUMBER = re.compile(r"[0-9]+(?:\.[0-9]+)?", re.ASCII)
 
@@ -54,9 +54,9 @@ def parse_arguments(args: list[str]) -> Command:
         else:
             raise Failure("invalid_input", "A command takes no further arguments.")
     if name is None:
-        raise Failure("invalid_input", "Name a command: classify or info.")
+        raise Failure("invalid_input", "Name a command: classify, info or add-key.")
     if name not in COMMANDS:
-        raise Failure("invalid_input", "Unknown command. The commands are classify and info.")
+        raise Failure("invalid_input", "Unknown command. The commands are classify, info and add-key.")
     for key in values:
         if key not in COMMANDS[name]:
             raise Failure("invalid_input", f"Option --{key} does not apply to {name}.")
