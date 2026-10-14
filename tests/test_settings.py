@@ -81,7 +81,7 @@ class SettingsFile(unittest.TestCase):
         self.assertIn(str(self.file), str(caught.exception))
 
     def test_an_unknown_key_refuses_the_file(self) -> None:
-        # CLS-D5, by its proposed default: refuse the file and name the key.
+        # CLS-D5, decided by the owner: refuse the file and name the key.
         self.refused({"timoutSeconds": 5}, "timoutSeconds")
         self.refused({"model": "jev-1.13.0", "extra": 1, "more": 2}, "extra", "more")
         self.refused({"secret": {"from": "keychain", "account": "jev"}}, "secret.account")

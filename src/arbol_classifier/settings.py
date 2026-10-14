@@ -2,7 +2,7 @@
 
 The file is read at the start of every call and never written. It may be missing.
 A faulty file refuses the call and names the file and the fault, never a value.
-A key the classifier does not know refuses the file too (CLS-D5, its proposed default).
+A key the classifier does not know refuses the file too (CLS-D5, decided by the owner on 14 October 2026).
 """
 
 import ipaddress
