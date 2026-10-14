@@ -67,12 +67,41 @@ class Invocation(unittest.TestCase):
                 self.assertEqual((error["code"], error["retryable"]), ("invalid_input", False))
                 self.assertIsInstance(error["message"], str)
 
-    def test_classify_is_not_built_yet(self) -> None:
-        status, document = cli.run(["classify"], self.environ)
-        self.assertEqual(status, 1)
-        error = document["error"]
-        assert isinstance(error, dict)
-        self.assertEqual(error["code"], "internal")
+    def test_classify_reads_the_request_on_standard_input(self) -> None:
+        (self.home / ".arbol").mkdir()
+        (self.home / ".arbol/arbol-classifier.json").write_text(
+            '{"endpoint": "http://127.0.0.1:9/v1/systemone", "secret": {"from": "command", "command": ["/bin/echo", "k"]}}'
+        )
+        request = b'{"state": "judged marker", "questions": {"work": {"type": "noul", "instructions": "Work?"}}}'
+        sent: list[tuple[str, bytes, str, float]] = []
+
+        def send(endpoint: str, body: bytes, key: str, timeout: float) -> tuple[int, bytes]:
+            sent.append((endpoint, body, key, timeout))
+            return 200, b'{"model": "jev-1.13.0", "answers": {"work": {"type": "noul", "noul": 1}}}'
+
+        with patch("arbol_classifier.classify.post", send):
+            status, document = cli.run(["classify", "--timeout", "3"], self.environ, lambda: request)
+            self.assertEqual((status, document["model"]), (0, "jev-1.13.0"))
+            self.assertEqual([(call[0], call[2], call[3]) for call in sent], [("http://127.0.0.1:9/v1/systemone", "k", 3.0)])
+            status, document = cli.run(["classify"], self.environ, lambda: request)
+            self.assertEqual((status, sent[-1][3]), (0, 10.0))
+
+    def test_only_classify_reads_standard_input(self) -> None:
+        def unreadable() -> bytes:
+            raise AssertionError("standard input was read")
+
+        self.assertEqual(cli.run(["info"], self.environ, unreadable)[0], 0)
+        self.assertEqual(cli.run(["classify", "--timeout", "0"], self.environ, unreadable)[0], 1)
+
+    def test_a_refused_request_is_an_error_object(self) -> None:
+        for data in (b"", b"[]", b'{"state": "judged marker"}'):
+            with self.subTest(data=data):
+                status, document = cli.run(["classify"], self.environ, lambda: data)  # noqa: B023
+                self.assertEqual(status, 1)
+                error = document["error"]
+                assert isinstance(error, dict)
+                self.assertEqual(error["code"], "invalid_input")
+                self.assertNotIn("judged marker", dumps(document))
 
     def test_an_unexpected_defect_is_internal(self) -> None:
         with patch.object(cli, "read_settings", side_effect=RuntimeError("judged text marker")), patch("sys.stderr"):

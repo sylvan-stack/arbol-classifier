@@ -2,18 +2,28 @@
 
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from . import CONTRACT, NAME
 from .arguments import parse_arguments
 from .build import build_identity
+from .classify import classify
 from .errors import Failure
 from .json_types import Object, dumps
 from .settings import read_settings, settings_path
 
 
-def run(args: list[str], environ: Mapping[str, str]) -> tuple[int, Object]:
+def standard_input() -> bytes:
+    try:
+        return sys.stdin.buffer.read()
+    except (OSError, AttributeError, ValueError):
+        raise Failure("invalid_input", "Cannot read the request on standard input.") from None
+
+
+def run(
+    args: list[str], environ: Mapping[str, str], read_input: Callable[[], bytes] = standard_input
+) -> tuple[int, Object]:
     try:
         command = parse_arguments(args)
         home = environ.get("HOME") or str(Path.home())
@@ -31,7 +41,8 @@ def run(args: list[str], environ: Mapping[str, str]) -> tuple[int, Object]:
                 "endpoint": settings.endpoint,
                 "keyFound": False,  # The key is looked for from SYL-161 on.
             }
-        raise Failure("internal", "classify is not part of this Build yet.")
+        timeout = command.timeout_seconds if command.timeout_seconds is not None else settings.timeout_seconds
+        return 0, classify(read_input(), settings, file, timeout)
     except Failure as failure:
         return 1, {"error": failure.error()}
     except Exception as error:
