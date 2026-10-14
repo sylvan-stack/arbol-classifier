@@ -111,5 +111,8 @@ class Packaging(unittest.TestCase):
                      "classify.size-limit", "classify.other-model", "classify.missing-answer",
                      "classify.endpoint-elsewhere", "classify.writes-nothing", "key.keychain", "key.not-found",
                      "key.only-in-the-bearer-token", "add-key.at-a-terminal", "add-key.no-terminal",
-                     "add-key.not-a-key", "add-key.keychain-refuses", "cli.add-key-arguments", "cli.build-entry"):
+                     "add-key.not-a-key", "add-key.keychain-refuses", "cli.add-key-arguments", "cli.build-entry",
+                     "errors.credential-rejected", "errors.invalid-at-jev", "errors.rate-limited",
+                     "errors.vendor-unavailable", "errors.vendor-error", "attempts.until-an-answer", "attempts.waits",
+                     "limits.no-wait-past-the-limit", "limits.time-limit"):
             self.assertIn(name, names)

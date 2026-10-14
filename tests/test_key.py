@@ -15,6 +15,7 @@ from stand_ins import security_stand_in
 from arbol_classifier import key as key_module
 from arbol_classifier.errors import Failure
 from arbol_classifier.key import ACCOUNT, SERVICE, key_found, read_key, store_key
+from arbol_classifier.limits import Deadline
 from arbol_classifier.settings import Settings
 
 FILE = Path("/Users/someone/.arbol/arbol-classifier.json")
@@ -29,10 +30,10 @@ def command(code: str) -> Settings:
     return Settings(secret_command=(sys.executable, "-I", "-B", "-c", code))
 
 
-def missing(test: unittest.TestCase, settings: Settings, *why: str, timeout: float = 10) -> Failure:
+def missing(test: unittest.TestCase, settings: Settings, *why: str) -> Failure:
     """The call ends with not_signed_in: no Jev API key was found, where it was looked for, and how to store it."""
     with test.assertRaises(Failure) as caught:
-        read_key(settings, FILE, timeout)
+        read_key(settings, FILE, Deadline(10))
     failure = caught.exception
     test.assertEqual(failure.code, "not_signed_in")
     test.assertTrue(str(failure).startswith("No Jev API key was found."), str(failure))
@@ -41,8 +42,18 @@ def missing(test: unittest.TestCase, settings: Settings, *why: str, timeout: flo
     test.assertIsNotNone(failure.remedy)
     test.assertIn("arbol-classifier add-key", str(failure.remedy))
     test.assertNotIn("key-marker", str(failure) + str(failure.remedy))
-    test.assertFalse(key_found(settings, FILE, timeout))
+    test.assertFalse(key_found(settings, FILE, 10))
     return failure
+
+
+def too_slow(test: unittest.TestCase, settings: Settings, during: str) -> None:
+    """A key source that is still busy at the time limit of the call ends it with limit_reached (CLS-0.9)."""
+    with test.assertRaises(Failure) as caught:
+        read_key(settings, FILE, Deadline(0.5))
+    test.assertEqual(caught.exception.code, "limit_reached")
+    test.assertIn("0.5 seconds", str(caught.exception))
+    test.assertIn(during, str(caught.exception))
+    test.assertFalse(key_found(settings, FILE, 0.5))
 
 
 class Keychain(unittest.TestCase):
@@ -51,9 +62,9 @@ class Keychain(unittest.TestCase):
 
     def test_the_key_is_read_from_the_item_at_each_call(self) -> None:
         self.security.put(SERVICE, ACCOUNT, "key-marker-1")
-        self.assertEqual(read_key(Settings(), FILE, 10), "key-marker-1")
+        self.assertEqual(read_key(Settings(), FILE, Deadline(10)), "key-marker-1")
         self.security.put(SERVICE, ACCOUNT, "key-marker-2")
-        self.assertEqual(read_key(Settings(), FILE, 10), "key-marker-2")
+        self.assertEqual(read_key(Settings(), FILE, Deadline(10)), "key-marker-2")
         self.assertTrue(key_found(Settings(), FILE, 10))
         self.assertEqual([call["args"] for call in self.security.calls()], [FIND, FIND, FIND])
 
@@ -93,11 +104,11 @@ class Keychain(unittest.TestCase):
             slow.write_text("#!/bin/sh\nsleep 5\n")
             slow.chmod(0o755)
             with patch.object(key_module, "SECURITY", str(slow)):
-                missing(self, Settings(), "did not answer within 0.5 seconds", timeout=0.5)
+                too_slow(self, Settings(), "while the Jev API key was read from the login Keychain")
 
     def test_a_key_command_in_the_settings_takes_the_place_of_the_item(self) -> None:
         self.security.put(SERVICE, ACCOUNT, "key-marker-item")
-        self.assertEqual(read_key(command("print('key-marker-command')"), FILE, 10), "key-marker-command")
+        self.assertEqual(read_key(command("print('key-marker-command')"), FILE, Deadline(10)), "key-marker-command")
         self.assertEqual(self.security.calls(), [])
 
 
@@ -113,8 +124,8 @@ class KeyCommand(unittest.TestCase):
         self.security = security_stand_in(self)
 
     def test_what_the_command_prints_is_the_key(self) -> None:
-        self.assertEqual(read_key(command("print('key-marker-1')"), FILE, 10), "key-marker-1")
-        self.assertEqual(read_key(command("print('  key-marker-2\\r\\n')"), FILE, 10), "key-marker-2")
+        self.assertEqual(read_key(command("print('key-marker-1')"), FILE, Deadline(10)), "key-marker-1")
+        self.assertEqual(read_key(command("print('  key-marker-2\\r\\n')"), FILE, Deadline(10)), "key-marker-2")
 
     def test_a_command_that_fails_or_prints_nothing_gives_not_signed_in(self) -> None:
         where = f"the command that the settings file {FILE} names for the key"
@@ -123,7 +134,7 @@ class KeyCommand(unittest.TestCase):
         missing(self, command("print('   ')"), "printed nothing")
         missing(self, command("print('key-marker with space')"), "not a key")
         missing(self, command("print('key-marker\\nsecond line')"), "not a key")
-        missing(self, command("import time; time.sleep(5)"), "did not end", timeout=0.5)
+        too_slow(self, command("import time; time.sleep(5)"), f"while the command that the settings file {FILE} names")
         with tempfile.TemporaryDirectory() as name:
             missing(self, Settings(secret_command=(str(Path(name) / "no-such-program"),)), "could not be started")
         self.assertEqual(self.security.calls(), [])
@@ -151,7 +162,7 @@ class StoreKey(unittest.TestCase):
         self.assertIn("key-marker-new", calls[1]["stdin"])
         for call in calls:
             self.assertNotIn("key-marker", json.dumps(call["args"]) + json.dumps(call["env"]))
-        self.assertEqual(read_key(Settings(), FILE, 10), "key-marker-new")
+        self.assertEqual(read_key(Settings(), FILE, Deadline(10)), "key-marker-new")
 
     def test_a_key_stored_before_is_replaced(self) -> None:
         self.security.put(SERVICE, ACCOUNT, "key-marker-old")
@@ -180,7 +191,7 @@ class StoreKey(unittest.TestCase):
     def test_the_item_is_never_removed(self) -> None:
         self.security.put(SERVICE, ACCOUNT, "key-marker-old")
         store_key("key-marker-new")
-        read_key(Settings(), FILE, 10)
+        read_key(Settings(), FILE, Deadline(10))
         missing(self, command("pass"))
         commands = [call["args"][0] for call in self.security.calls()] + [
             word for call in self.security.calls() for word in call["stdin"].split()

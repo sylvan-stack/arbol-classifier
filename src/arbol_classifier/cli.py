@@ -1,7 +1,9 @@
 """One invocation, one command: one JSON document on standard output, status 0 or 1."""
 
 import os
+import select
 import sys
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -12,13 +14,26 @@ from .classify import classify
 from .errors import Failure
 from .json_types import Object, dumps
 from .key import ACCOUNT, SERVICE, can_be_key, key_found, store_key
+from .limits import Deadline
 from .settings import read_settings, settings_path
 from .terminal import NOTHING_STORED, ask_for_key
 
 
-def standard_input() -> bytes:
+def standard_input(deadline: Deadline) -> bytes:
+    """The request on standard input, read until it ends or the time limit of the call is reached."""
+    chunks: list[bytes] = []
     try:
-        return sys.stdin.buffer.read()
+        fd = sys.stdin.fileno()
+        while True:
+            remaining = deadline.remaining()
+            if remaining <= 0:
+                raise deadline.reached("while the request was read on standard input")
+            if not select.select([fd], [], [], remaining)[0]:
+                continue
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
     except (OSError, AttributeError, ValueError):
         raise Failure("invalid_input", "Cannot read the request on standard input.") from None
 
@@ -41,9 +56,10 @@ def add_key(ask: Callable[[], str]) -> Object:
 def run(
     args: list[str],
     environ: Mapping[str, str],
-    read_input: Callable[[], bytes] = standard_input,
+    read_input: Callable[[Deadline], bytes] = standard_input,
     ask: Callable[[], str] = ask_for_key,
 ) -> tuple[int, Object]:
+    started = time.monotonic()
     try:
         command = parse_arguments(args)
         if command.name == "add-key":
@@ -64,7 +80,8 @@ def run(
                 "keyFound": key_found(settings, file, settings.timeout_seconds),
             }
         timeout = command.timeout_seconds if command.timeout_seconds is not None else settings.timeout_seconds
-        return 0, classify(read_input(), settings, file, timeout)
+        deadline = Deadline(timeout, started)
+        return 0, classify(read_input(deadline), settings, file, deadline)
     except Failure as failure:
         return 1, {"error": failure.error()}
     except Exception as error:

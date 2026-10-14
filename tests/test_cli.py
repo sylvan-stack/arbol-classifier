@@ -16,6 +16,7 @@ from arbol_classifier import cli
 from arbol_classifier.errors import CODES, Failure
 from arbol_classifier.json_types import dumps
 from arbol_classifier.key import ACCOUNT, SERVICE
+from arbol_classifier.limits import Deadline
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -124,19 +125,43 @@ class Invocation(unittest.TestCase):
         request = b'{"state": "judged marker", "questions": {"work": {"type": "noul", "instructions": "Work?"}}}'
         sent: list[tuple[str, bytes, str, float]] = []
 
-        def send(endpoint: str, body: bytes, key: str, timeout: float) -> tuple[int, bytes]:
-            sent.append((endpoint, body, key, timeout))
-            return 200, b'{"model": "jev-1.13.0", "answers": {"work": {"type": "noul", "noul": 1}}}'
+        def send(endpoint: str, body: bytes, key: str, deadline: Deadline) -> tuple[int, bytes, int | None]:
+            sent.append((endpoint, body, key, deadline.seconds))
+            return 200, b'{"model": "jev-1.13.0", "answers": {"work": {"type": "noul", "noul": 1}}}', None
+
+        def given(deadline: Deadline) -> bytes:
+            return request
 
         with patch("arbol_classifier.classify.post", send):
-            status, document = cli.run(["classify", "--timeout", "3"], self.environ, lambda: request)
+            status, document = cli.run(["classify", "--timeout", "3"], self.environ, given)
             self.assertEqual((status, document["model"]), (0, "jev-1.13.0"))
             self.assertEqual([(call[0], call[2], call[3]) for call in sent], [("http://127.0.0.1:9/v1/systemone", "k", 3.0)])
-            status, document = cli.run(["classify"], self.environ, lambda: request)
+            status, document = cli.run(["classify"], self.environ, given)
             self.assertEqual((status, sent[-1][3]), (0, 10.0))
 
+    def test_standard_input_is_read_until_it_ends_or_the_time_limit(self) -> None:
+        reading, writing = os.pipe()
+        self.addCleanup(os.close, reading)
+        os.write(writing, b'{"state": "judged marker",')
+        os.write(writing, b' "questions": {}}')
+        os.close(writing)
+        with os.fdopen(os.dup(reading), "rb", buffering=0) as stdin, patch("sys.stdin", stdin):
+            self.assertEqual(cli.standard_input(Deadline(10)), b'{"state": "judged marker", "questions": {}}')
+        still_open, writer = os.pipe()
+        self.addCleanup(os.close, still_open)
+        self.addCleanup(os.close, writer)
+        with (
+            os.fdopen(os.dup(still_open), "rb", buffering=0) as stdin,
+            patch("sys.stdin", stdin),
+            patch("arbol_classifier.limits.SCALE", 0.05),
+            self.assertRaises(Failure) as caught,
+        ):
+            cli.standard_input(Deadline(2))
+        self.assertEqual(caught.exception.code, "limit_reached")
+        self.assertIn("2 seconds", str(caught.exception))
+
     def test_only_classify_reads_standard_input(self) -> None:
-        def unreadable() -> bytes:
+        def unreadable(deadline: Deadline) -> bytes:
             raise AssertionError("standard input was read")
 
         self.assertEqual(cli.run(["info"], self.environ, unreadable)[0], 0)
@@ -145,7 +170,7 @@ class Invocation(unittest.TestCase):
     def test_a_refused_request_is_an_error_object(self) -> None:
         for data in (b"", b"[]", b'{"state": "judged marker"}'):
             with self.subTest(data=data):
-                status, document = cli.run(["classify"], self.environ, lambda: data)  # noqa: B023
+                status, document = cli.run(["classify"], self.environ, lambda deadline: data)  # noqa: B023
                 self.assertEqual(status, 1)
                 error = document["error"]
                 assert isinstance(error, dict)

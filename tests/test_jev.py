@@ -1,12 +1,15 @@
-"""The call to Jev, with a fake connection: only the endpoint's address, the key as a bearer token (CLS-0.5, 0.13)."""
+"""One attempt at Jev, with a fake connection: only the endpoint's address, the key as a bearer token, and an
+attempt that cannot outlast the time limit of the call (CLS-0.5, 0.9, 0.13)."""
 
 import http.client
+import time
 import unittest
 from typing import Any
 from unittest.mock import patch
 
 from arbol_classifier import jev
 from arbol_classifier.errors import Failure
+from arbol_classifier.limits import Deadline
 
 
 class FakeSocket:
@@ -19,8 +22,14 @@ class FakeSocket:
 
 class FakeResponse:
     status = 200
+    retry_after: str | None = None
+    slow = 0.0
+
+    def getheader(self, name: str) -> str | None:
+        return FakeResponse.retry_after if name == "Retry-After" else None
 
     def read(self) -> bytes:
+        time.sleep(FakeResponse.slow)
         return b'{"answer": true}'
 
 
@@ -56,6 +65,8 @@ class Transport(unittest.TestCase):
         FakeConnection.made = []
         FakeConnection.peer = "127.0.0.1"
         FakeConnection.fail = None
+        FakeResponse.retry_after = None
+        FakeResponse.slow = 0.0
         for name in ("HTTPConnection", "HTTPSConnection"):
             patcher = patch.object(http.client, name, FakeConnection)
             patcher.start()
@@ -63,10 +74,12 @@ class Transport(unittest.TestCase):
 
     def test_the_body_goes_to_the_endpoint_with_the_key_as_a_bearer_token(self) -> None:
         FakeConnection.peer = "203.0.113.7"
-        status, answer = jev.post("https://api.typesafe.ai/v1/systemone", b'{"state":"x"}', "key-marker", 7.5)
-        self.assertEqual((status, answer), (200, b'{"answer": true}'))
+        status, answer, retry_after = jev.post("https://api.typesafe.ai/v1/systemone", b'{"state":"x"}', "key-marker",
+                                               Deadline(7.5))
+        self.assertEqual((status, answer, retry_after), (200, b'{"answer": true}', None))
         [connection] = FakeConnection.made
-        self.assertEqual((connection.host, connection.port, connection.timeout), ("api.typesafe.ai", None, 7.5))
+        self.assertEqual((connection.host, connection.port), ("api.typesafe.ai", None))
+        self.assertTrue(7 < connection.timeout <= 7.5, connection.timeout)
         self.assertIsNotNone(connection.context)
         self.assertEqual(
             connection.requests,
@@ -86,7 +99,7 @@ class Transport(unittest.TestCase):
             with self.subTest(endpoint=endpoint):
                 FakeConnection.made = []
                 FakeConnection.peer = peer
-                jev.post(endpoint, b"{}", "key", 10)
+                jev.post(endpoint, b"{}", "key", Deadline(10))
                 [connection] = FakeConnection.made
                 self.assertEqual((connection.host, connection.port, connection.requests[0][1]), (host, port, path))
 
@@ -96,7 +109,7 @@ class Transport(unittest.TestCase):
                 FakeConnection.made = []
                 FakeConnection.peer = peer
                 with self.assertRaises(Failure) as caught:
-                    jev.post("http://localhost:8649/v1/systemone", b"{}", "key-marker", 10)
+                    jev.post("http://localhost:8649/v1/systemone", b"{}", "key-marker", Deadline(10))
                 self.assertEqual(caught.exception.code, "invalid_input")
                 self.assertNotIn("key-marker", str(caught.exception))
                 [connection] = FakeConnection.made
@@ -109,8 +122,8 @@ class Transport(unittest.TestCase):
         for peer in ("192.168.1.20", "0.0.0.0", "::", "::ffff:10.0.0.1", "fe80::1%lo0", "localhost", ""):
             self.assertFalse(jev.on_this_mac(peer), peer)
 
-    def test_a_call_that_cannot_be_made(self) -> None:
-        # One attempt and a first mapping; the table of errors and the attempts come with SYL-162.
+    def test_an_attempt_that_cannot_be_made(self) -> None:
+        # A failed connection is vendor_unavailable, which classify tries again (CLS-0.11).
         for error, code in (
             (TimeoutError(), "limit_reached"),
             (ConnectionRefusedError(), "vendor_unavailable"),
@@ -120,6 +133,22 @@ class Transport(unittest.TestCase):
             with self.subTest(error=error):
                 FakeConnection.fail = error
                 with self.assertRaises(Failure) as caught:
-                    jev.post("http://127.0.0.1:9/v1/systemone", b"{}", "key-marker", 10)
+                    jev.post("http://127.0.0.1:9/v1/systemone", b"{}", "key-marker", Deadline(10))
                 self.assertEqual(caught.exception.code, code)
                 self.assertNotIn("key-marker", str(caught.exception))
+
+    def test_an_attempt_ends_with_the_time_limit_of_the_call(self) -> None:
+        FakeResponse.slow = 3.0
+        started = time.monotonic()
+        with patch("arbol_classifier.limits.SCALE", 0.1), self.assertRaises(Failure) as caught:
+            jev.post("http://127.0.0.1:9/v1/systemone", b"{}", "key-marker", Deadline(2))
+        self.assertLess(time.monotonic() - started, 1.0)
+        self.assertEqual(caught.exception.code, "limit_reached")
+        self.assertIn("2 seconds", str(caught.exception))
+
+    def test_retry_after_in_seconds(self) -> None:
+        for header, expected in (("7", 7), (" 120 ", 120), ("Wed, 21 Oct 2026 07:28:00 GMT", None), ("-1", None),
+                                 ("1.5", None), (None, None)):
+            with self.subTest(header=header):
+                FakeResponse.retry_after = header
+                self.assertEqual(jev.post("http://127.0.0.1:9/v1/systemone", b"{}", "key", Deadline(10))[2], expected)
