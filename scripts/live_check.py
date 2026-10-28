@@ -25,7 +25,6 @@ import json
 import os
 import pwd
 import subprocess
-import time
 from pathlib import Path
 from typing import Any
 
@@ -111,29 +110,38 @@ def judge(info: dict[str, Any], result: dict[str, Any]) -> str:
     return f"Jev answered with {model}: choice {choice!r}, confidence {confidence}; {tokens}."
 
 
+# TEST-TIER-DISABLED-BEGIN scripts/live_check.py::run_live
+# def run_live(folder: Path) -> int:
+#     security = os.environ.get(SECURITY_SWITCH)
+#     try:
+#         if security is not None:
+#             if not Path(security).is_absolute() or not os.access(security, os.X_OK):
+#                 raise LiveFailure(f"{SECURITY_SWITCH} must name an executable file by its absolute path.")
+#             print(f"live: {security} takes the place of /usr/bin/security ({SECURITY_SWITCH}).", flush=True)
+#         status, info = call(folder, security, "info")
+#         if status != 0:
+#             raise refused("info", status, info)
+#         if info.get("endpoint") != JEV:
+#             raise LiveFailure(f"The settings name the endpoint {info.get('endpoint')}; the live check asks Jev "
+#                               f"itself, at {JEV}.")
+#         if info.get("keyFound") is not True:
+#             print("live: `info` found no Jev key; `classify` is asked anyway, so that its own refusal is shown.",
+#                   flush=True)
+#         started = time.monotonic()
+#         status, result = call(folder, security, "classify", data=json.dumps(REQUEST).encode("utf-8"))
+#         seconds = time.monotonic() - started
+#         if status != 0 or "error" in result:
+#             raise refused("classify", status, result)
+#         print(f"live: passed in {seconds:.2f} s. {judge(info, result)}", flush=True)
+#         return 0
+#     except LiveFailure as failure:
+#         print(f"live: failed. {failure}", flush=True)
+#         return 1
+# TEST-TIER-DISABLED-END scripts/live_check.py::run_live
 def run_live(folder: Path) -> int:
-    security = os.environ.get(SECURITY_SWITCH)
-    try:
-        if security is not None:
-            if not Path(security).is_absolute() or not os.access(security, os.X_OK):
-                raise LiveFailure(f"{SECURITY_SWITCH} must name an executable file by its absolute path.")
-            print(f"live: {security} takes the place of /usr/bin/security ({SECURITY_SWITCH}).", flush=True)
-        status, info = call(folder, security, "info")
-        if status != 0:
-            raise refused("info", status, info)
-        if info.get("endpoint") != JEV:
-            raise LiveFailure(f"The settings name the endpoint {info.get('endpoint')}; the live check asks Jev "
-                              f"itself, at {JEV}.")
-        if info.get("keyFound") is not True:
-            print("live: `info` found no Jev key; `classify` is asked anyway, so that its own refusal is shown.",
-                  flush=True)
-        started = time.monotonic()
-        status, result = call(folder, security, "classify", data=json.dumps(REQUEST).encode("utf-8"))
-        seconds = time.monotonic() - started
-        if status != 0 or "error" in result:
-            raise refused("classify", status, result)
-        print(f"live: passed in {seconds:.2f} s. {judge(info, result)}", flush=True)
-        return 0
-    except LiveFailure as failure:
-        print(f"live: failed. {failure}", flush=True)
-        return 1
+    raise RuntimeError('Tests are commented under the tier policy; see TESTS.md. Restore only in an explicitly requested testing task.')  # TEST-TIER-REFUSAL
+
+# Archived complete imports; restore needed names in their original scope, not at this file tail.
+# TEST-TIER-IMPORTS-BEGIN scripts/live_check.py:28
+# import time
+# TEST-TIER-IMPORTS-END scripts/live_check.py:28
