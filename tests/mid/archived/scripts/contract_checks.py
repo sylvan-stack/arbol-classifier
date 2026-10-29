@@ -727,7 +727,7 @@ def run_contract(program: Path, build_folder: Path, version: str, build: str) ->
         else:
             print(f"passed {title}", flush=True)
     total = len(SCENARIOS) + 1
-    print(json.dumps({"check": "contract", "scenarios": total, "passed": total - failed, "failed": failed}), flush=True)
+    print(json.dumps({"check": "retained-contract-selection", "fullQualification": False, "scenarios": total, "passed": total - failed, "failed": failed}), flush=True)
     return 1 if failed else 0
 
 # Archived complete imports; restore needed names in their original scope, not at this file tail.
