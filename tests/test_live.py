@@ -109,3 +109,19 @@ class WithoutAKey(LiveTest):
 
 
 # Archived complete imports; restore needed names in their original scope, not at this file tail.
+
+# LOW TIER — DO NOT ENABLE OR RECREATE
+# Historical examples only. Read before adding related tests; never execute.
+# LOW-TIER-BEGIN: tests/test_live.py::Judge.test_the_reply_names_the_model_of_info_and_holds_the_answer
+# Reason: Repeats the same valid INFO/REPLY judgement already run by the complete private-program live-check case.
+# Source: arbol-classifier@1dfee903bbb88a6f8d95da33ed5a80e507de21f0:tests/test_live.py
+# Retained evidence at review: Live.test_one_choice_question_through_the_builds_own_program invokes judge and checks success and usage; invalid/missing answers remain independently tested.
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_the_reply_names_the_model_of_info_and_holds_the_answer(self) -> None:
+#         said = live_check.judge(INFO, REPLY)
+#         self.assertIn("jev-1.13.0", said)
+#         self.assertIn("'request'", said)
+#         self.assertIn("333 of input, 38 of output", said)
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END
