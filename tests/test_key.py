@@ -75,3 +75,34 @@ class StoreKey(unittest.TestCase):
 
 
 # Archived complete imports; restore needed names in their original scope, not at this file tail.
+
+# LOW TIER — DO NOT ENABLE OR RECREATE
+# Historical examples only. Read before adding related tests; never execute.
+# LOW-TIER-BEGIN: tests/test_key.py::SystemCommand.test_the_systems_security_command_and_the_item_of_cls_0
+# Reason: Compares three imported constants with the same three source literals.
+# Source: arbol-classifier@1d77a9f4a205228e6b856f5ff4602a05511a1480:tests/test_key.py
+# Retained evidence at review: Keychain and StoreKey behavioral cases inspect the actual security invocation and account isolation.
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_the_systems_security_command_and_the_item_of_cls_0(self) -> None:
+#         self.assertEqual(
+#             (key_module.SECURITY, SERVICE, ACCOUNT), ("/usr/bin/security", "com.sylvan-stack.arbol.classifier", "jev")
+#         )
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END
+
+# LOW-TIER-BEGIN: tests/test_key.py::KeyCommand.test_the_remedy_says_how_to_store_the_key
+# Reason: Copies the full remedy sentence without exercising a distinct failure; the missing helper already checks the add-key remedy.
+# Source: arbol-classifier@1d77a9f4a205228e6b856f5ff4602a05511a1480:tests/test_key.py
+# Retained evidence at review: test_a_command_that_fails_or_prints_nothing_gives_not_signed_in and missing retain the failure and actionable remedy checks.
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_the_remedy_says_how_to_store_the_key(self) -> None:
+#         failure = missing(self, command("pass"))
+#         self.assertEqual(
+#             failure.remedy,
+#             f"Correct secret.command in the settings file {FILE}, or remove secret from it and store the key with: "
+#             "arbol-classifier add-key",
+#         )
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END
