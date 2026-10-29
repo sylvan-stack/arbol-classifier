@@ -1,8 +1,13 @@
-# Shared fixtures only; test bodies are in top/ and mid/. See TESTS.md.
+# Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
 """The key: from the Keychain item at each call, or from the command the settings name, and `add-key` (CLS-0.8, 0.16).
 
 A stand-in takes the place of the system's `security` command; no test reaches the real Keychain.
 """
+import tempfile
+from unittest.mock import patch
+
+from arbol_classifier import key as key_module
+
 
 import json
 import sys

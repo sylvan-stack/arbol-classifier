@@ -1,5 +1,9 @@
-# Shared fixtures only; test bodies are in top/ and mid/. See TESTS.md.
+# Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
 """The Build that runs: the package version and the build number (BLD-0.12 and 0.14)."""
+
+from arbol_classifier.build import build_identity
+from arbol_classifier.errors import Failure
+
 
 import json
 import tempfile
