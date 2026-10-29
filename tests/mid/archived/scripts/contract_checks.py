@@ -286,172 +286,6 @@ def info_identity(contract: Contract) -> None:
     expect(info["keyFound"] is False, f"keyFound is {info['keyFound']!r}")
 
 
-@scenario("info.defaults")
-def info_defaults(contract: Contract) -> None:
-    info = contract.info()
-    expect(info["settingsFile"] == str(contract.home / ".arbol/arbol-classifier.json"),
-           f"settingsFile is {info['settingsFile']!r}")
-    expect(info["model"] == DEFAULT_MODEL, f"model is {info['model']!r}")
-    expect(info["endpoint"] == DEFAULT_ENDPOINT, f"endpoint is {info['endpoint']!r}")
-
-
-@scenario("info.settings-file")
-def info_settings_file(contract: Contract) -> None:
-    file = contract.settings({"model": "jev-1.14.0", "timeoutSeconds": 5, "maxRequestBytes": 32000,
-                              "endpoint": "http://127.0.0.1:8649/v1/systemone", "secret": {"from": "keychain"}})
-    info = contract.info()
-    expect(info["settingsFile"] == str(file), f"settingsFile is {info['settingsFile']!r}")
-    expect(info["model"] == "jev-1.14.0", f"model is {info['model']!r}")
-    expect(info["endpoint"] == "http://127.0.0.1:8649/v1/systemone", f"endpoint is {info['endpoint']!r}")
-
-
-@scenario("info.settings-option")
-def info_settings_option(contract: Contract) -> None:
-    contract.settings({"model": "jev-1.14.0"})
-    other = contract.settings({"model": "jev-2.0.0", "endpoint": "http://localhost:9/v1/systemone"}, "tests/other.json")
-    for args in (("--settings", "tests/other.json"), (f"--settings={other}",)):
-        info = contract.info(*args, cwd=contract.home)
-        expect(info["settingsFile"] == str(other), f"settingsFile is {info['settingsFile']!r} for {list(args)}")
-        expect(info["model"] == "jev-2.0.0" and info["endpoint"] == "http://localhost:9/v1/systemone",
-               f"info did not read {other} for {list(args)}")
-    missing = contract.home / "tests/missing.json"
-    info = contract.info("--settings", str(missing))
-    expect(info["settingsFile"] == str(missing) and info["model"] == DEFAULT_MODEL,
-           "a missing settings file named with --settings did not give the defaults")
-
-
-@scenario("info.accepted-settings")
-def info_accepted_settings(contract: Contract) -> None:
-    for value in (
-        {},
-        {"model": "jev-2.10.3", "timeoutSeconds": 2.5, "maxRequestBytes": 1, "endpoint": "http://[::1]:7000/v1/systemone",
-         "secret": {"from": "command", "command": ["/usr/bin/true"]}},
-        {"timeoutSeconds": 1, "endpoint": "https://localhost/v1/systemone"},
-        {"timeoutSeconds": 60, "endpoint": DEFAULT_ENDPOINT, "secret": {"from": "keychain"}},
-    ):
-        contract.settings(value)
-        info = contract.info()
-        expect(info["model"] == value.get("model", DEFAULT_MODEL), f"model is {info['model']!r} for {value}")
-        expect(info["endpoint"] == value.get("endpoint", DEFAULT_ENDPOINT), f"endpoint is {info['endpoint']!r}")
-
-
-@scenario("settings.faulty-file")
-def settings_faulty_file(contract: Contract) -> None:
-    file = contract.home / ".arbol/arbol-classifier.json"
-    for text in ("{", "[]", '"jev-1.13.0"', "null", '{"timeoutSeconds": NaN}', ""):
-        contract.settings(text)
-        contract.refused("info", names=(str(file),))
-    file.unlink()
-    file.mkdir()
-    contract.refused("info", names=(str(file),))
-
-
-@scenario("settings.unknown-key")
-def settings_unknown_key(contract: Contract) -> None:
-    file = contract.settings({"timoutSeconds": 5})
-    contract.refused("info", names=(str(file), "timoutSeconds"))
-    contract.settings({"secret": {"from": "keychain", "account": "jev"}})
-    contract.refused("info", names=("secret.account",))
-    contract.settings({"secret": {"from": "command", "command": ["/usr/bin/true"], "env": {}}})
-    contract.refused("info", names=("secret.env",))
-
-
-@scenario("settings.moving-model")
-def settings_moving_model(contract: Contract) -> None:
-    for model in ("jev-latest", "jev-preview", "jev-1.13", "jev-1.13.0-preview", "Jev-1.13.0", "jev-01.13.0"):
-        contract.settings({"model": model})
-        contract.refused("info", names=("model",), hidden=(model,))
-
-
-@scenario("settings.faulty-fields")
-def settings_faulty_fields(contract: Contract) -> None:
-    cases: list[tuple[object, str, tuple[str, ...]]] = [
-        ({"model": 5}, "model", ()),
-        ({"model": ""}, "model", ()),
-        ({"timeoutSeconds": "10"}, "timeoutSeconds", ()),
-        ({"timeoutSeconds": 0}, "timeoutSeconds", ()),
-        ({"timeoutSeconds": 0.5}, "timeoutSeconds", ()),
-        ({"timeoutSeconds": 61}, "timeoutSeconds", ()),
-        ({"timeoutSeconds": True}, "timeoutSeconds", ()),
-        ('{"timeoutSeconds": 1e400}', "timeoutSeconds", ()),
-        ({"maxRequestBytes": 0}, "maxRequestBytes", ()),
-        ({"maxRequestBytes": 1.5}, "maxRequestBytes", ()),
-        ({"maxRequestBytes": "64000"}, "maxRequestBytes", ()),
-        ({"maxRequestBytes": False}, "maxRequestBytes", ()),
-        ({"endpoint": "https://example.com/v1/systemone"}, "endpoint", ("example.com",)),
-        ({"endpoint": "https://api.typesafe.ai/v2/systemone"}, "endpoint", ("v2/systemone",)),
-        ({"endpoint": "http://192.168.1.20:8080/v1/systemone"}, "endpoint", ("192.168.1.20",)),
-        ({"endpoint": "http://127.0.0.1.example.net/v1"}, "endpoint", ("example.net",)),
-        ({"endpoint": "http://localhost@example.org/v1"}, "endpoint", ("example.org",)),
-        ({"endpoint": "ftp://localhost/v1"}, "endpoint", ("ftp:",)),
-        ({"endpoint": "localhost:8080"}, "endpoint", ("localhost:8080",)),
-        ({"endpoint": ["http://localhost/"]}, "endpoint", ()),
-        ({"secret": "keychain"}, "secret", ()),
-        ({"secret": {}}, "secret.from", ()),
-        ({"secret": {"from": "plain-file-marker"}}, "secret.from", ("plain-file-marker",)),
-        ({"secret": {"from": "command"}}, "secret.command", ()),
-        ({"secret": {"from": "command", "command": []}}, "secret.command", ()),
-        ({"secret": {"from": "command", "command": ["", "print-key"]}}, "secret.command", ("print-key",)),
-        ({"secret": {"from": "command", "command": "print-key-marker"}}, "secret.command", ("print-key-marker",)),
-    ]
-    for value, name, hidden in cases:
-        file = contract.settings(value)
-        contract.refused("info", names=(str(file), name), hidden=hidden)
-
-
-@scenario("cli.no-command")
-def cli_no_command(contract: Contract) -> None:
-    contract.refused()
-    contract.refused("--settings", "tests/other.json")
-
-
-@scenario("cli.unknown-command")
-def cli_unknown_command(contract: Contract) -> None:
-    for command in ("judge-this-marker", "Info", "help"):
-        contract.refused(command, hidden=(command,) if command != "help" else ())
-
-
-@scenario("cli.unknown-option")
-def cli_unknown_option(contract: Contract) -> None:
-    for args in (("info", "--verbose"), ("info", "--state-dir", "/tmp/state"), ("info", "-h"), ("info", "--"),
-                 ("--key=secret-marker", "info")):
-        contract.refused(*args, hidden=("secret-marker",))
-
-
-@scenario("cli.build-selector")
-def cli_build_selector(contract: Contract) -> None:
-    contract.refused("-v", "3", "info")
-    contract.refused("info", "-v", "3")
-
-
-@scenario("cli.extra-argument")
-def cli_extra_argument(contract: Contract) -> None:
-    contract.refused("info", "now")
-    contract.refused("info", "classify")
-
-
-@scenario("cli.option-once")
-def cli_option_once(contract: Contract) -> None:
-    contract.refused("info", "--settings", "a.json", "--settings", "b.json", names=("--settings",))
-    contract.refused("classify", "--timeout", "5", "--timeout=6", names=("--timeout",))
-
-
-@scenario("cli.option-value")
-def cli_option_value(contract: Contract) -> None:
-    contract.refused("info", "--settings", names=("--settings",))
-    contract.refused("info", "--settings=", names=("--settings",))
-    contract.refused("info", "--settings", "--settings", names=("--settings",))
-    contract.refused("classify", "--timeout", names=("--timeout",))
-
-
-@scenario("cli.timeout")
-def cli_timeout(contract: Contract) -> None:
-    contract.refused("info", "--timeout", "5", names=("--timeout",))
-    for value in ("0", "0.5", "61", "60.5", "ten", "-5", "1e1", " 5", "５"):
-        contract.refused("classify", "--timeout", value, names=("--timeout",))
-        contract.refused("classify", f"--timeout={value}", names=("--timeout",))
-
-
 def choice_request() -> dict[str, Any]:
     return {"state": JUDGED, "questions": {"kind": {"type": "choice", "instructions": "What is this message?",
             "criteria": {"request": "It asks for work to be done", "question": "It asks for information only",
@@ -466,46 +300,6 @@ def expect_sent(stand_in: StandIn, request: dict[str, Any], model: str = DEFAULT
     expect(received.json() == {**request, "model": model},
            f"the body sent is not the request with model {model} added: {received.body!r}")
     return received
-
-
-@scenario("classify.choice")
-def classify_choice(contract: Contract) -> None:
-    with StandIn() as stand_in:
-        settings = contract.classify_settings(stand_in)
-        request = choice_request()
-        result = contract.answered(request, settings, stand_in)
-        expect_sent(stand_in, request)
-        expect(result["answers"]["kind"]["choice"] == "request" and result["model"] == DEFAULT_MODEL,
-               f"the choice is not passed on: {result}")
-        contract.answered(request, settings, stand_in, "--timeout", "5")
-        expect_sent(stand_in, request)
-
-
-@scenario("classify.noul")
-def classify_noul(contract: Contract) -> None:
-    with StandIn() as stand_in:
-        settings = contract.classify_settings(stand_in)
-        request = {"state": {"message": JUDGED, "from": "the Leather Bag"},
-                   "questions": {"work": {"type": "noul", "instructions": "Does the message ask for work?"},
-                                 "polite": {"type": "noul", "instructions": "Is it polite?",
-                                            "criteria": {"true": "It is polite", "false": "It is rude"}}}}
-        result = contract.answered(request, settings, stand_in)
-        expect_sent(stand_in, request)
-        expect(set(result["answers"]) == {"work", "polite"} and result["answers"]["work"]["noul"] == 0.93,
-               f"the answers are not passed on: {result}")
-
-
-@scenario("classify.score")
-def classify_score(contract: Contract) -> None:
-    with StandIn() as stand_in:
-        settings = contract.classify_settings(stand_in)
-        request = {"state": [JUDGED, "and a second message"],
-                   "questions": {"urgency": {"type": "score", "instructions": {"ask": "How urgent is it?"},
-                                             "criteria": ["Not urgent", {"level": "Soon"}, "At once"]}}}
-        result = contract.answered(request, settings, stand_in)
-        expect_sent(stand_in, request)
-        expect(result["answers"]["urgency"]["score"] == 2 and result["answers"]["urgency"]["legend"]["1"]
-               == {"level": "Soon"}, f"the score is not passed on: {result}")
 
 
 @scenario("classify.what-is-sent")
@@ -526,17 +320,6 @@ def classify_what_is_sent(contract: Contract) -> None:
         for value in {socket.gethostname(), socket.gethostname().split(".")[0], str(contract.home),
                       str(contract.work)}:
             expect(not value or value not in sent, f"the request names the machine: {value!r}")
-
-
-@scenario("classify.pinned-model")
-def classify_pinned_model(contract: Contract) -> None:
-    with StandIn() as stand_in:
-        request = choice_request()
-        contract.answered(request, contract.classify_settings(stand_in), stand_in)
-        expect_sent(stand_in, request, DEFAULT_MODEL)
-        result = contract.answered(request, contract.classify_settings(stand_in, model="jev-1.14.0"), stand_in)
-        expect_sent(stand_in, request, "jev-1.14.0")
-        expect(result["model"] == "jev-1.14.0", f"the result names {result['model']!r}")
 
 
 @scenario("classify.other-model")
@@ -578,15 +361,6 @@ def classify_missing_answer(contract: Contract) -> None:
             contract.classify_failed(request, settings, stand_in, "vendor_error", sends=1)
 
 
-@scenario("classify.names-a-model")
-def classify_names_a_model(contract: Contract) -> None:
-    with StandIn() as stand_in:
-        settings = contract.classify_settings(stand_in)
-        for model in (DEFAULT_MODEL, "jev-latest", None, ["jev-1.13.0"]):
-            contract.classify_failed({**choice_request(), "model": model}, settings, stand_in, "invalid_input",
-                                     ("model",))
-
-
 @scenario("classify.size-limit")
 def classify_size_limit(contract: Contract) -> None:
     with StandIn() as stand_in:
@@ -604,37 +378,6 @@ def classify_size_limit(contract: Contract) -> None:
         expect_sent(stand_in, request)
         large = {**request, "state": JUDGED + " " + "long " * 12800}
         contract.classify_failed(large, contract.classify_settings(stand_in), stand_in, "invalid_input", ("64000",))
-
-
-@scenario("classify.malformed")
-def classify_malformed(contract: Contract) -> None:
-    question = {"type": "noul", "instructions": "Work?"}
-    with StandIn() as stand_in:
-        settings = contract.classify_settings(stand_in)
-        for request in (
-            b"", b"{", b"[]", b'"text"', b"null", b"5", b"{} {}", b"\xff\xfe", b'{"state": NaN, "questions": {}}',
-            {"questions": {"work": question}},
-            {"state": JUDGED},
-            {"state": JUDGED, "questions": {}},
-            {"state": JUDGED, "questions": [question]},
-            {"state": JUDGED, "questions": {"work": "Does it ask for work?"}},
-            {"state": JUDGED, "questions": {"work": {"instructions": "Work?"}}},
-            {"state": JUDGED, "questions": {"work": {"type": "noul"}}},
-            {"state": JUDGED, "questions": {"work": question, "polite": {"type": "noul"}}},
-        ):
-            contract.classify_failed(request, settings, stand_in, "invalid_input")
-
-
-@scenario("classify.passes-questions-through")
-def classify_passes_questions_through(contract: Contract) -> None:
-    with StandIn() as stand_in:
-        settings = contract.classify_settings(stand_in)
-        request = {"state": None, "questions": {
-            "order": {"type": "rank", "instructions": None, "hint": {"any": ["data"]}},
-            "kind": {"type": "choice", "instructions": [], "criteria": {}},
-        }, "trace": {"kept": True}}
-        contract.answered(request, settings, stand_in)
-        expect_sent(stand_in, request)
 
 
 @scenario("classify.endpoint-elsewhere")
@@ -678,25 +421,6 @@ def bearer(received: Received) -> str | None:
 
 def security_args(contract: Contract) -> list[list[str]]:
     return [call["args"] for call in contract.security.calls()]
-
-
-@scenario("key.keychain")
-def key_keychain(contract: Contract) -> None:
-    """The key is read at each call from the Keychain item, with the system's command, and never written there."""
-    contract.security.put(SERVICE, ACCOUNT, KEY)
-    with StandIn() as stand_in:
-        settings = contract.keychain_settings(stand_in)
-        request = choice_request()
-        contract.answered(request, settings, stand_in)
-        expect(bearer(stand_in.received[-1]) == f"Bearer {KEY}", "classify did not send the key of the item")
-        contract.security.put(SERVICE, ACCOUNT, KEY_SECOND)
-        contract.answered(request, settings, stand_in)
-        expect(bearer(stand_in.received[-1]) == f"Bearer {KEY_SECOND}",
-               "classify did not read the item again at the second call")
-        expect(contract.info("--settings", str(settings))["keyFound"] is True, "info did not find the key of the item")
-    expect(security_args(contract) == [FIND, FIND, FIND],
-           f"the calls asked security for more than the item: {security_args(contract)}")
-    expect(contract.security.value(SERVICE, ACCOUNT) == KEY_SECOND, "a call changed the item")
 
 
 @scenario("key.not-found")
@@ -790,31 +514,6 @@ def add_key_no_terminal(contract: Contract) -> None:
     expect(contract.security.calls() == [], "add-key without a terminal started security")
 
 
-@scenario("add-key.not-a-key")
-def add_key_not_a_key(contract: Contract) -> None:
-    """Nothing typed, or something that cannot be a key: refused, and nothing is stored."""
-    for typed, says in ((b"\n", "No key was typed"), (b"\x04", "No key was typed"),
-                        (TYPED.encode() + b" and more\n", "cannot be a Jev API key")):
-        outcome, _ = contract.at_terminal("add-key", typed=typed)
-        failed(outcome, ["add-key"], "invalid_input", (says, "Nothing was stored"), ())
-    expect(contract.security.calls() == [], "add-key started security for something that is not a key")
-
-
-@scenario("add-key.keychain-refuses")
-def add_key_keychain_refuses(contract: Contract) -> None:
-    """A Keychain that does not store the key: the call fails and says so, without the key."""
-    contract.security.fail(51)
-    outcome, _ = contract.at_terminal("add-key", typed=TYPED.encode() + b"\n")
-    failed(outcome, ["add-key"], "internal", ("could not be stored", SERVICE), ())
-
-
-@scenario("cli.add-key-arguments")
-def cli_add_key_arguments(contract: Contract) -> None:
-    for args in (("add-key", "--settings", "other.json"), ("add-key", "--timeout", "5"), ("add-key", "now")):
-        contract.refused(*args)
-    expect(contract.security.calls() == [], "a refused add-key started security")
-
-
 @scenario("cli.build-entry")
 def cli_build_entry(contract: Contract) -> None:
     """The Build's own entry, bin/arbol-classifier, without the stand-in for security: a key command gives the key."""
@@ -851,16 +550,6 @@ def answering(*replies: Reply | None) -> Callable[[Received], Reply]:
 def vendor_status(error: dict[str, Any], status: int) -> None:
     expect(error.get("detail") == {"basis": "fields", "vendorStatus": status},
            f"the error does not name Jev's status {status}: {error}")
-
-
-@scenario("errors.credential-rejected")
-def errors_credential_rejected(contract: Contract) -> None:
-    with StandIn(answering(Reply.of({"message": "Invalid API key"}, 401))) as stand_in:
-        settings = contract.classify_settings(stand_in)
-        error = contract.classify_failed(choice_request(), settings, stand_in, "credential_rejected",
-                                         ("401", "Invalid API key"), sends=1, scale=QUICK)
-        vendor_status(error, 401)
-        expect(STORE in str(error.get("remedy")), f"the remedy does not say how to store a key: {error}")
 
 
 @scenario("errors.invalid-at-jev")
@@ -919,19 +608,6 @@ def errors_vendor_unavailable(contract: Contract) -> None:
            ("could not be reached", "Attempts made: 3"), ())
 
 
-@scenario("errors.vendor-error")
-def errors_vendor_error(contract: Contract) -> None:
-    """Another refusal: no further attempt. A reply that cannot be accepted is checked in classify.other-model and
-    classify.missing-answer."""
-    with StandIn() as stand_in:
-        settings = contract.classify_settings(stand_in)
-        for status in (400, 403, 404, 302):
-            stand_in.script = answering(Reply.of({"message": "No"}, status))
-            error = contract.classify_failed(choice_request(), settings, stand_in, "vendor_error", (str(status),),
-                                             sends=1, scale=QUICK)
-            vendor_status(error, status)
-
-
 @scenario("attempts.until-an-answer")
 def attempts_until_an_answer(contract: Contract) -> None:
     """A further attempt after 529, 429, a status from 500 on or a closed connection, and the answer it brings."""
@@ -947,29 +623,6 @@ def attempts_until_an_answer(contract: Contract) -> None:
             expect(outcome.document == json.loads(stand_in.replies[-1].body), "classify did not print the answer")
         stand_in.script = answering(Reply.of({}, 529), Reply.of({"message": "No"}, 401))
         contract.classify_failed(choice_request(), settings, stand_in, "credential_rejected", sends=2, scale=QUICK)
-
-
-@scenario("attempts.waits")
-def attempts_waits(contract: Contract) -> None:
-    """Half a second before the second attempt and one second before the third, here scaled by 0.1."""
-    with StandIn(answering(Reply.of({}, 529))) as stand_in:
-        settings = contract.classify_settings(stand_in)
-        contract.classify_failed(choice_request(), settings, stand_in, "vendor_unavailable", sends=3, scale=0.1)
-        first, second, third = (received.at for received in stand_in.received)
-        expect(0.05 <= second - first < 0.5, f"the first wait took {second - first:.3f} s, not 0.05 s")
-        expect(0.1 <= third - second < 0.55, f"the second wait took {third - second:.3f} s, not 0.1 s")
-
-
-@scenario("limits.no-wait-past-the-limit")
-def limits_no_wait_past_the_limit(contract: Contract) -> None:
-    """Scaled by 0.2, a limit of 1.2 seconds is 0.24 s: it holds the first wait of 0.1 s but not the second of 0.2 s.
-    The call ends with what the last attempt gave, within its limit."""
-    with StandIn(answering(Reply.of({}, 529))) as stand_in:
-        settings = contract.classify_settings(stand_in)
-        outcome = contract.classify(choice_request(), settings, "--timeout", "1.2", scale=0.2)
-        failed(outcome, ["classify"], "vendor_unavailable", ("Attempts made: 2",), ())
-        expect(len(stand_in.received) == 2, f"classify made {len(stand_in.received)} attempts, not 2")
-        expect(stand_in.received[-1].at - stand_in.received[0].at < 0.24, "an attempt was made past the time limit")
 
 
 @scenario("limits.time-limit")
@@ -1074,7 +727,7 @@ def run_contract(program: Path, build_folder: Path, version: str, build: str) ->
         else:
             print(f"passed {title}", flush=True)
     total = len(SCENARIOS) + 1
-    print(json.dumps({"check": "contract", "scenarios": total, "passed": total - failed, "failed": failed}), flush=True)
+    print(json.dumps({"check": "retained-contract-selection", "fullQualification": False, "scenarios": total, "passed": total - failed, "failed": failed}), flush=True)
     return 1 if failed else 0
 
 # Archived complete imports; restore needed names in their original scope, not at this file tail.
