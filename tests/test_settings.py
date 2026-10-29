@@ -1,5 +1,14 @@
-# Shared fixtures only; test bodies are in top/ and mid/. See TESTS.md.
+# Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
 """The settings file: the defaults, every field of ClassifierSettings, and a faulty file refused."""
+
+from arbol_classifier.settings import (
+    DEFAULT_ENDPOINT,
+    Settings,
+    allowed_endpoint,
+    exact_model,
+    read_settings,
+)
+
 
 import json
 import tempfile

@@ -1,5 +1,6 @@
-# Shared fixtures only; test bodies are in top/ and mid/. See TESTS.md.
+# Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
 """The command line: one command, its options, and every other argument refused."""
+
 
 import unittest
 

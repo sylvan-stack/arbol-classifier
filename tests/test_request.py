@@ -1,5 +1,9 @@
-# Shared fixtures only; test bodies are in top/ and mid/. See TESTS.md.
+# Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
 """The request: only the checks CLS-0 lists (CLS-0.4), and the size limit on the body as it is sent (CLS-0.10)."""
+
+from arbol_classifier.json_types import Json, loads
+from arbol_classifier.request import body_for_jev, read_request
+
 
 import json
 import unittest

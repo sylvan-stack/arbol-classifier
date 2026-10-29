@@ -1,10 +1,11 @@
-# Shared fixtures only; test bodies are in top/ and mid/. See TESTS.md.
+# Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
 """The live check (CLS-0.15): how it asks Jev one question, and what it takes as passed.
 
 No test reaches Jev or the Keychain: a pretend program stands in for the Build's own, and where
 the real program runs, the stand-in for `security` holds no item, so the call ends before
 anything is sent.
 """
+
 
 import contextlib
 import io
@@ -19,6 +20,8 @@ from typing import Any
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from stand_ins import SecurityStandIn
+
 import live_check  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -103,7 +106,6 @@ class Live(LiveTest):
 
 class WithoutAKey(LiveTest):
     """The real program, started as the live check starts it, with the stand-in for `security` holding no item."""
-
 
 
 # Archived complete imports; restore needed names in their original scope, not at this file tail.

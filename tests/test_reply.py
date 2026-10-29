@@ -1,5 +1,6 @@
-# Shared fixtures only; test bodies are in top/ and mid/. See TESTS.md.
+# Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
 """Jev's reply: the model asked for, an answer for every question and no other, and nothing taken away (CLS-0.6, 0.7)."""
+
 
 import json
 import unittest
