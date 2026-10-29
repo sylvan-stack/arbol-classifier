@@ -1,3 +1,4 @@
+# Shared fixtures only; test bodies are in top/ and mid/. See TESTS.md.
 """The Build that runs: the package version and the build number (BLD-0.12 and 0.14)."""
 
 import json
@@ -30,39 +31,4 @@ class Identity(unittest.TestCase):
         (self.folder / "build.json").write_text(json.dumps(value))
 
 
-# TEST-TIER-DISABLED-BEGIN tests/test_identity.py::Identity.test_a_damaged_record_is_a_defect
-#     def test_a_damaged_record_is_a_defect(self) -> None:
-#         values: tuple[object, ...] = (
-#             [],
-#             {"component": "arbol-codex-driver", "build": "1", "packageVersion": "1.0.0"},
-#             {"component": "arbol-classifier", "build": "0a", "packageVersion": "1.0.0"},
-#             {"component": "arbol-classifier", "build": "A", "packageVersion": "1.0.0"},
-#             {"component": "arbol-classifier", "build": 1, "packageVersion": "1.0.0"},
-#             {"component": "arbol-classifier", "build": "1", "packageVersion": "one"},
-#         )
-#         for value in values:
-#             with self.subTest(value=value):
-#                 self.record(value)
-#                 with self.assertRaises(Failure) as caught:
-#                     build_identity(self.module)
-#                 self.assertEqual(caught.exception.code, "internal")
-#         (self.folder / "build.json").write_text("{")
-#         with self.assertRaises(Failure):
-#             build_identity(self.module)
-# TEST-TIER-DISABLED-END tests/test_identity.py::Identity.test_a_damaged_record_is_a_defect
-
-# TEST-TIER-DISABLED-BEGIN tests/test_identity.py::Identity.test_another_package_is_not_this_one
-#     def test_another_package_is_not_this_one(self) -> None:
-#         (self.folder / "pyproject.toml").write_text('[project]\nname = "arbol-codex-driver"\nversion = "1.0.0"\n')
-#         with self.assertRaises(Failure) as caught:
-#             build_identity(self.module)
-#         self.assertEqual(caught.exception.code, "internal")
-# TEST-TIER-DISABLED-END tests/test_identity.py::Identity.test_another_package_is_not_this_one
-
 # Archived complete imports; restore needed names in their original scope, not at this file tail.
-# TEST-TIER-IMPORTS-BEGIN tests/test_identity.py:8
-# from arbol_classifier.build import build_identity
-# TEST-TIER-IMPORTS-END tests/test_identity.py:8
-# TEST-TIER-IMPORTS-BEGIN tests/test_identity.py:9
-# from arbol_classifier.errors import Failure
-# TEST-TIER-IMPORTS-END tests/test_identity.py:9
