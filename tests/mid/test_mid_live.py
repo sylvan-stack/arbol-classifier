@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import test_live as _support
-from test_live import (ROOT ,SecurityStandIn ,live_check ,os ,patch ,sys)
+from test_live import ROOT, SecurityStandIn, live_check, os, patch, sys
 
 
 class WithoutAKey(_support.WithoutAKey):

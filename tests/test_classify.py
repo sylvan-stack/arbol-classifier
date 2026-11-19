@@ -1,13 +1,6 @@
 # Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
 """`classify` as one piece: what it adds, that it starts nothing but what prints the key (ARC-0.30), the attempts
 and the waits (CLS-0.11), and the table of errors (CLS-0.12)."""
-import subprocess
-import sys
-from typing import Any
-
-from stand_ins import security_stand_in
-from arbol_classifier.key import ACCOUNT, SERVICE
-
 
 import json
 import time
@@ -19,6 +12,8 @@ from arbol_classifier.classify import classify
 from arbol_classifier.errors import Failure
 from arbol_classifier.limits import Deadline
 from arbol_classifier.settings import Settings
+
+__all__ = ["FakeJev", "failure_of", "patch", "time"]
 
 FILE = Path("/Users/someone/.arbol/arbol-classifier.json")
 REQUEST = {"state": "judged marker", "questions": {"work": {"type": "noul", "instructions": "Work?"}}}

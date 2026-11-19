@@ -20,14 +20,12 @@ make the check pass without a key that Jev accepts, since the question still goe
 """
 
 from __future__ import annotations
-import time
-
-
 
 import json
 import os
 import pwd
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 

@@ -2,16 +2,17 @@
 """One attempt at Jev, with a fake connection: only the endpoint's address, the key as a bearer token, and an
 attempt that cannot outlast the time limit of the call (CLS-0.5, 0.9, 0.13)."""
 
-from arbol_classifier import jev
-from arbol_classifier.errors import Failure
-from arbol_classifier.limits import Deadline
-
-
 import http.client
 import time
 import unittest
 from typing import Any
 from unittest.mock import patch
+
+from arbol_classifier import jev
+from arbol_classifier.errors import Failure
+from arbol_classifier.limits import Deadline
+
+__all__ = ["Deadline", "Failure", "FakeConnection", "jev"]
 
 
 class FakeSocket:

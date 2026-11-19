@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import test_jev as _support
-from test_jev import (Deadline ,Failure ,FakeConnection ,jev)
+from test_jev import Deadline, Failure, FakeConnection, jev
 
 
 class Transport(_support.Transport):

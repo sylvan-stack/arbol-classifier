@@ -1,20 +1,15 @@
 # Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
 """`add-key` asks at the terminal without showing what is typed, and refuses without a terminal (CLS-0.16)."""
-import tempfile
-import termios
-import threading
-from pathlib import Path
-from unittest.mock import patch
-
-from arbol_classifier import terminal
-from arbol_classifier.errors import Failure
-from arbol_classifier.terminal import PROMPT, ask_for_key, read_hidden
-
-
 import os
 import select
+import termios
+import threading
 import time
 import unittest
+
+from arbol_classifier.terminal import PROMPT, read_hidden
+
+__all__ = ["PROMPT", "os", "read_hidden", "shown_until", "termios", "threading"]
 
 
 def shown_until(master: int, text: bytes, seconds: float = 10) -> bytes:

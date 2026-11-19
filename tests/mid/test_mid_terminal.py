@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import test_terminal as _support
-from test_terminal import (PROMPT ,os ,read_hidden ,shown_until ,termios ,threading)
+from test_terminal import PROMPT, os, read_hidden, shown_until, termios, threading
 
 
 class Terminal(_support.Terminal):

@@ -3,11 +3,6 @@
 
 A stand-in takes the place of the system's `security` command; no test reaches the real Keychain.
 """
-import tempfile
-from unittest.mock import patch
-
-from arbol_classifier import key as key_module
-
 
 import json
 import sys
@@ -20,6 +15,8 @@ from arbol_classifier.errors import Failure
 from arbol_classifier.key import ACCOUNT, SERVICE, key_found, read_key, store_key
 from arbol_classifier.limits import Deadline
 from arbol_classifier.settings import Settings
+
+__all__ = ["ACCOUNT", "Deadline", "FILE", "FIND", "SERVICE", "Settings", "json", "read_key", "store_key"]
 
 FILE = Path("/Users/someone/.arbol/arbol-classifier.json")
 NO_KEY = (

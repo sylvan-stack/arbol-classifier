@@ -20,9 +20,10 @@ from typing import Any
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import live_check  # noqa: E402
 from stand_ins import SecurityStandIn
 
-import live_check  # noqa: E402
+__all__ = ["ROOT", "SecurityStandIn", "live_check", "os", "patch", "sys"]
 
 ROOT = Path(__file__).resolve().parents[1]
 INFO = {"name": "arbol-classifier", "version": "1.0.0", "build": "5", "contract": 1,

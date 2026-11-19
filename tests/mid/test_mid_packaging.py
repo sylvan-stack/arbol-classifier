@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import test_packaging as _support
-from test_packaging import (Path ,hashlib ,os ,package_build ,patch ,tempfile)
+from test_packaging import Path, hashlib, os, package_build, patch, tempfile
 
 
 class Packaging(_support.Packaging):

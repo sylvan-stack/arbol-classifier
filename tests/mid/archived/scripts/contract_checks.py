@@ -15,23 +15,20 @@ itself, with a key command in its settings.
 """
 
 from __future__ import annotations
-import socket
-import tempfile
-
-from jev_stand_in import DROP, Received, Reply, StandIn, like_jev
-
 
 import json
 import os
 import select
+import socket
 import subprocess
+import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from jev_stand_in import Received, Reply, StandIn, like_jev
+from jev_stand_in import DROP, Received, Reply, StandIn, like_jev
 from security_stand_in import SecurityStandIn
 
 NAME = "arbol-classifier"

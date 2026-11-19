@@ -1,14 +1,13 @@
 """Check the program in its final Build folder, without starting a launcher."""
 
 from __future__ import annotations
-import unittest
-
 
 import argparse
 import json
 import os
 import subprocess
 import sys
+import unittest
 from pathlib import Path
 from typing import Any
 
